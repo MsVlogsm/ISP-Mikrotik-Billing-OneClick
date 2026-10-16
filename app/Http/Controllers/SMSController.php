@@ -3,8 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Models\SmsTemplate;
-use Codepagol\SmsBridge\Facades\SmsBridge;
-use Codepagol\SmsBridge\Response\SmsResponse;
+use XLink\SmsBridge\Facades\SmsBridge;
+use XLink\SmsBridge\Response\SmsResponse;
 
 class SMSController extends Controller
 {

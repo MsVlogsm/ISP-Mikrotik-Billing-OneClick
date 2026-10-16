@@ -16,9 +16,7 @@
             <div class="mb-3 row">
                 <label for="mobile" class="col-md-4 col-form-label text-md-end text-start">{{ __('Mobile') }}</label>
                 <div class="col-md-7">
-                    <div wire:ignore>
-                        <input id="mobile" type="text" class="form-control @error('mobile') is-invalid @enderror" placeholder="{{ __('Mobile') }}" x-data="intlTelInput('mobile')" autocomplete="mobile" value="{{ $this->mobile ?? '' }}">
-                    </div>
+                    <input id="mobile" type="text" class="form-control @error('mobile') is-invalid @enderror" placeholder="{{ __('Mobile') }} (e.g. 017XXXXXXXX)" wire:model="mobile" autocomplete="tel-national" inputmode="numeric" maxlength="11" pattern="01[3-9][0-9]{8}" title="Enter 11-digit Bangladesh mobile number starting with 01">
                     
                     <x-error name="mobile" />
                 </div>

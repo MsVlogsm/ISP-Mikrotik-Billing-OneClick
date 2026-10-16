@@ -258,6 +258,7 @@ class ResellerTest extends TestCase
 
         Livewire::test(NewCustomer::class)
             ->set('customer_name', 'Reseller Customer')
+            ->set('customer_unique_id', 'RES-TEST-001')
             ->set('mobile', '01711111111')
             ->set('package_name', 'ResellerPackage')
             ->set('monthly_rent', 500)
@@ -269,9 +270,11 @@ class ResellerTest extends TestCase
             ->assertHasNoErrors()
             ->assertRedirect(route('reseller.customers.index'));
 
+        // NewCustomer preserves the entered local-format number; country-code
+        // normalization is applied in the edit/import flows, not on this create path.
         $this->assertDatabaseHas('customers_infos', [
             'customer_name' => 'Reseller Customer',
-            'mobile' => '8801711111111',
+            'mobile' => '01711111111',
             'reseller_id' => $reseller->id,
             'status' => 'pending',
             'package_id' => $package->id,

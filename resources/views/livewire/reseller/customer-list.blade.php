@@ -21,7 +21,7 @@
                             <label class="btn btn-outline-primary btn-sm rounded-pill px-3 shadow-none fw-600" for="all_list">
                                 <i class="bi bi-people-fill me-1"></i> {{ __('All Customers') }} <span class="badge bg-white text-primary fw-bold"></span>
                             </label>
-                            
+
                             <input type="radio" class="btn-check" name="collection" id="all_active_list" autocomplete="off" checked>
                             <label class="btn btn-outline-primary btn-sm rounded-pill px-3 shadow-none fw-600" for="all_active_list">
                                 <i class="bi bi-people-fill me-1"></i> {{ __('All Active') }} <span class="badge bg-white text-primary fw-bold"></span>
@@ -53,7 +53,7 @@
                             </label>
                         </div>
                         <div class="ms-auto border-start ps-2">
-                            <a href="{{ route('reseller.customers.create') }}" class="btn btn-primary btn-sm rounded-pill px-3 fw-bold me-1">
+                            <a href="{{ route($panelRoutePrefix.'.customers.create') }}" class="btn btn-primary btn-sm rounded-pill px-3 fw-bold me-1">
                                 <i class="bi bi-plus-lg me-1"></i> {{ __('Register Customer') }}
                             </a>
                             <button type="button" id="reset_table" class="btn btn-light btn-sm rounded-pill px-3 fw-bold border" title="{{ __('Reset all filters and search') }}">
@@ -199,7 +199,7 @@
         }
         .text-indigo { color: #6610f2 !important; }
         .bg-indigo { background-color: #6610f2; color: #fff; }
-        
+
         .billing-card {
             min-width: 120px;
             padding: 5px;
@@ -211,7 +211,7 @@
             transform: translateY(-1px);
             box-shadow: 0 4px 8px rgba(0,0,0,0.1) !important;
         }
-        
+
         .filter-group::-webkit-scrollbar {
             height: 4px;
         }
@@ -301,7 +301,7 @@
                     'colvis'
                 ],
                 ajax: {
-                    url: "{{ route('reseller.customers.data') }}", 
+                    url: "{{ route($panelRoutePrefix.'.customers.data') }}",
                     data: function(d) {
                         if ($('#all_list').is(':checked')) {
                             d.filter = 'all';
@@ -330,7 +330,7 @@
                     { data: 'billing_summary', name: 'billing.total_amount', title: '{{ __('Billing Summary') }}', className: 'text-end' },
                     { data: 'disable_details', name: 'disable_details', title: '{{ __('Auto Disable') }}', className: 'text-center' },
                     { data: 'action', name: 'action', title: '{{ __('Action') }}', orderable: false, searchable: false, className: 'text-center' },
-                    
+
                     // Invisible columns for raw data & totals (8-22)
                     { data: 'customer_unique_id', name: 'customer_unique_id', title: '{{ __('ID') }}', visible: false, searchable: false },
                     { data: 'customer_name', name: 'customer_name', title: '{{ __('Name') }}', visible: false, searchable: false },
@@ -357,7 +357,7 @@
                     };
 
                     var fields = {
-                        rent: 14, prev_due: 15, add_charge: 16, vat: 17, disc: 18, adv: 19, 
+                        rent: 14, prev_due: 15, add_charge: 16, vat: 17, disc: 18, adv: 19,
                         bill: 20, paid: 21, due: 22
                     };
 
@@ -379,7 +379,7 @@
 
                     // Update UI safely (Matching Table Column Design)
                     var breakdownStyle = 'style="font-size: 0.7rem; line-height: 1.4;"';
-                    
+
                     if ($('#page_total_3').length) {
                         $('#page_total_3').html(
                             '<div class="text-muted" ' + breakdownStyle + '>' +
@@ -438,7 +438,7 @@
             function updateCustomerCount() {
                 var count = table.page.info().recordsTotal;
                 $('.btn-check + label span').text(''); // Clear all counts
-                
+
                 var checkedId = $('input[name="collection"]:checked').attr('id');
                 if (checkedId) {
                     $('#' + checkedId + ' + label span').text('('+count+')');
@@ -446,22 +446,22 @@
             }
 
             table.on('draw', function () { updateCustomerCount(); });
-            
+
             function resetTableState() {
                 table.search('').columns().search('');
                 $('.dt-search input').val('');
             }
 
-            $('input[name="collection"]').on('change', function() { 
-                resetTableState();
-                table.clear().draw(); 
-                table.ajax.reload(null, true); 
-            });
-
-            $('#router_filter').on('change', function() { 
+            $('input[name="collection"]').on('change', function() {
                 resetTableState();
                 table.clear().draw();
-                table.ajax.reload(null, true); 
+                table.ajax.reload(null, true);
+            });
+
+            $('#router_filter').on('change', function() {
+                resetTableState();
+                table.clear().draw();
+                table.ajax.reload(null, true);
             });
 
             $('#reset_table').on('click', function() {
@@ -471,6 +471,34 @@
                 table.clear().draw();
                 table.ajax.reload(null, true);
             });
+
+            window.confirmActivateCustomer = function(encryptedId) {
+                Swal.fire({
+                    title: "{{ __('Activate this client?') }}",
+                    text: "{{ __('The account will be activated and synchronized to the router when available.') }}",
+                    icon: "question",
+                    showCancelButton: true,
+                    confirmButtonColor: "#15803d",
+                    cancelButtonColor: "#6b7280",
+                    confirmButtonText: "{{ __('Activate client') }}"
+                }).then((result) => {
+                    if (result.isConfirmed) { Livewire.dispatch('activate-reseller-customer', { id: encryptedId }); }
+                });
+            };
+
+            window.confirmDisableCustomer = function(encryptedId) {
+                Swal.fire({
+                    title: "{{ __('Disable this client?') }}",
+                    text: "{{ __('The client will be disabled and synchronized to the router when available.') }}",
+                    icon: "warning",
+                    showCancelButton: true,
+                    confirmButtonColor: "#d97706",
+                    cancelButtonColor: "#6b7280",
+                    confirmButtonText: "{{ __('Disable client') }}"
+                }).then((result) => {
+                    if (result.isConfirmed) { Livewire.dispatch('disable-reseller-customer', { id: encryptedId }); }
+                });
+            };
 
             window.confirmDeleteCustomer = function(encryptedId) {
                 Swal.fire({

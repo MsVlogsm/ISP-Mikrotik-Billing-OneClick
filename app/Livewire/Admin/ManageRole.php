@@ -4,6 +4,7 @@ namespace App\Livewire\Admin;
 
 use Livewire\Attributes\On;
 use Livewire\Component;
+use Illuminate\Support\Facades\DB;
 use Livewire\WithoutUrlPagination;
 use Livewire\WithPagination;
 use Spatie\Permission\Models\Permission;
@@ -31,18 +32,20 @@ class ManageRole extends Component
 
     protected $listeners = ['roleEdit' => 'editRole', 'roleDelete' => 'deleteRole'];
 
-    public function mount()
+    public function mount(): void
     {
-        if (! hasAccess(['Super Admin'], ['create-user-role', 'edit-user-role', 'view-user-role', 'delete-user-role'])) {
-            abort(403, 'Unauthorized Access.');
-        }
+        $this->authorizeRoleManagement();
     }
 
-    public function newRole()
+    /** Role permissions can grant access to every protected module, so only a Super Admin may edit them. */
+    private function authorizeRoleManagement(): void
     {
-        if (abortIfNoAccess(['Super Admin'], ['create-user-role'], 'You do not have permission to create roles.')) {
-            return;
-        }
+        abort_unless(auth()->user()?->hasRole('Super Admin'), 403, 'Only Super Admin can manage roles and permissions.');
+    }
+
+    public function newRole(): void
+    {
+        $this->authorizeRoleManagement();
 
         $this->reset(['roleType', 'roleId', 'name', 'permissions']);
         $this->permissionList = Permission::all();
@@ -50,11 +53,9 @@ class ManageRole extends Component
         $this->confirmingRole = true;
     }
 
-    public function editRole($roleId)
+    public function editRole($roleId): void
     {
-        if (abortIfNoAccess(['Super Admin'], ['edit-user-role'], 'You do not have permission to edit roles.')) {
-            return;
-        }
+        $this->authorizeRoleManagement();
 
         $this->role = Role::find($roleId);
         if (! $this->role) {
@@ -77,15 +78,14 @@ class ManageRole extends Component
         $this->confirmingRole = true;
     }
 
-    public function saveRole()
+    public function saveRole(): void
     {
-        if (abortIfNoAccess(['Super Admin'], ['edit-user-role'], 'You do not have permission to save roles.')) {
-            return;
-        }
+        $this->authorizeRoleManagement();
 
         $this->validate([
-            'name' => 'required|unique:roles,name,'.($this->roleId ?? 'NULL').'|max:255',
+            'name' => 'required|string|unique:roles,name,'.($this->roleId ?? 'NULL').'|max:255',
             'permissions' => 'array',
+            'permissions.*' => 'integer|exists:permissions,id',
         ]);
 
         if ($this->roleId) {
@@ -113,11 +113,9 @@ class ManageRole extends Component
         $this->confirmingRole = false;
     }
 
-    public function deleteRole($roleId, $roleName)
+    public function deleteRole($roleId, $roleName): void
     {
-        if (abortIfNoAccess(['Super Admin'], ['delete-role'], 'You do not have permission to delete roles.')) {
-            return;
-        }
+        $this->authorizeRoleManagement();
         if ($roleName === 'Super Admin') {
             session()->flash('error', 'Super Admin role cannot be deleted.');
 
@@ -136,6 +134,8 @@ class ManageRole extends Component
     #[On('sweetalert:confirmed')]
     public function onConfirmed(array $payload = []): void
     {
+        $this->authorizeRoleManagement();
+
         try {
             if (! $this->roleId) {
                 session()->flash('error', 'No role selected for deletion.');
@@ -159,6 +159,16 @@ class ManageRole extends Component
                 return;
             }
 
+            $roleIsAssigned = DB::table(config('permission.table_names.model_has_roles', 'model_has_roles'))
+                ->where('role_id', $role->id)
+                ->exists();
+            if ($roleIsAssigned) {
+                session()->flash('error', 'Reassign this role to another role before deleting it.');
+                $this->roleId = null;
+
+                return;
+            }
+
             $role->delete();
             $this->roleId = null;
 
@@ -177,8 +187,11 @@ class ManageRole extends Component
 
     public function render()
     {
-        $roles = Role::where('name', '!=', 'Reseller')->orderBy('id')->paginate($this->perPage);
+        $roles = Role::where('name', '!=', 'Reseller')->with('permissions')->orderBy('id')->paginate($this->perPage);
 
-        return view('livewire.admin.role.manage-role', ['roles' => $roles])->layout('layouts.app');
+        return view('livewire.admin.role.manage-role', [
+            'roles' => $roles,
+            'roleMatrix' => config('role_permission_matrix', []),
+        ])->layout('layouts.app');
     }
 }

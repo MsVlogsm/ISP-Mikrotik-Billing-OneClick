@@ -1,3 +1,12 @@
+@if (auth()->check() && auth()->user()->hasRole('Reseller') && auth()->user()->reseller?->isMacPanel())
+<nav id="navbar" class="navigation d-lg-none fixed-bottom bg-body-tertiary shadow-sm cp-z-10">
+    <ul class="nav nav-tabs justify-content-center">
+        <li class="nav-item"><a class="nav-link" wire:navigate.hover wire:current="active" href="{{ route('mac-reseller.dashboard') }}"><span class="icon"><i class="bi bi-house-door"></i></span><span class="text">{{ __('Home') }}</span></a></li>
+        <li class="nav-item"><a class="nav-link" wire:navigate.hover wire:current.exact="active" href="{{ route('mac-reseller.customers.index') }}"><span class="icon"><i class="bi bi-people-fill"></i></span><span class="text">{{ __('Clients') }}</span></a></li>
+        <li class="nav-item"><a class="nav-link" wire:navigate.hover wire:current="active" href="{{ route('mac-reseller.customers.create') }}"><span class="icon"><i class="bi bi-person-plus-fill"></i></span><span class="text">{{ __('Add Client') }}</span></a></li>
+    </ul>
+</nav>
+@else
 <nav id="navbar" class="navigation d-lg-none fixed-bottom bg-body-tertiary shadow-sm cp-z-10">
     <ul class="nav nav-tabs justify-content-center">
         @if (auth()->user()->roles()->exists() || auth()->user()->permissions()->exists())
@@ -106,3 +115,5 @@
         @endif
     </ul>
 </nav>
+
+@endif

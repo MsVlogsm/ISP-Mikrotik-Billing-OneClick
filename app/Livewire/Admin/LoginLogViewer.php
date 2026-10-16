@@ -42,7 +42,7 @@ class LoginLogViewer extends Component
 
     public function render()
     {
-        if (! hasAccess(['Super Admin'], ['all-customer'])) {
+        if (! hasAccess(['Super Admin'], ['view-audit-logs'])) {
             abort(403, 'Unauthorized action.');
         }
 

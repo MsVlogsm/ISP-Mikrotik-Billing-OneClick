@@ -20,6 +20,7 @@ class CollectionSummary extends Model
         'payment_type',
         'payment_method',
         'transaction_id',
+        'details',
         'payment_status',
         'bill_month',
         'invoice_no',

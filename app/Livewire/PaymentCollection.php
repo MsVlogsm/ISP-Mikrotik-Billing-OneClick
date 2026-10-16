@@ -44,11 +44,13 @@ class PaymentCollection extends Component
 
     public function mount()
     {
-        if (! hasAccess(['Super Admin'], ['payment-collection'])) {
-            abort(403, 'Unauthorized action.');
-        }
-
+        $this->authorizePaymentCollection();
         return true;
+    }
+
+    private function authorizePaymentCollection(): void
+    {
+        abort_unless(hasAccess(['Super Admin'], ['payment-collection']), 403, 'You do not have permission to collect payments.');
     }
     
     /**
@@ -163,6 +165,7 @@ class PaymentCollection extends Component
 
     public function selectCustomer($value)
     {
+        $this->authorizePaymentCollection();
         // $this->paid_amount;
         $this->expire_date = '';
         $customer_id = decrypt($value);
@@ -192,6 +195,7 @@ class PaymentCollection extends Component
 
     public function savePayment()
     {
+        $this->authorizePaymentCollection();
         if ($this->info_data->status != 'active') {
             sweetalert()->showDenyButton()->info('Are you sure you want to Enable this customer?');
         }
@@ -203,6 +207,7 @@ class PaymentCollection extends Component
     #[On('sweetalert:confirmed')]
     public function onConfirmed(array $payload): void
     {
+        $this->authorizePaymentCollection();
         $customerUniqueId = is_array($this->info_data)
             ? ($this->info_data['customer_unique_id'] ?? null)
             : ($this->info_data->customer_unique_id ?? null);
@@ -225,11 +230,13 @@ class PaymentCollection extends Component
     #[On('sweetalert:denied')]
     public function onDeny(array $payload): void
     {
+        $this->authorizePaymentCollection();
         $this->paymentSubmit();
     }
 
     public function paymentSubmit()
     {
+        $this->authorizePaymentCollection();
         DB::beginTransaction();
         try {
             CollectionSummary::create([

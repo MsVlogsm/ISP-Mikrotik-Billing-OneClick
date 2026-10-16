@@ -44,6 +44,11 @@ class ExpenseManager extends Component
 
     public bool $showModal = false;
 
+    private function authorizeExpenseManagement(): void
+    {
+        abort_unless(hasAccess(['Super Admin'], ['manage-expenses']), 403, 'You do not have permission to manage expenses.');
+    }
+
     public function boot(): void
     {
         $this->userSuggestions = collect();
@@ -51,6 +56,7 @@ class ExpenseManager extends Component
 
     public function mount(): void
     {
+        $this->authorizeExpenseManagement();
         $this->expense_date  = now()->format('Y-m-d');
         $this->filterMonth   = (string) now()->month;
         $this->filterYear    = (string) now()->year;
@@ -59,6 +65,7 @@ class ExpenseManager extends Component
 
     public function openCreate(): void
     {
+        $this->authorizeExpenseManagement();
         $this->reset(['editId', 'category', 'title', 'description', 'amount', 'reference_no',
                       'linkedUserId', 'userSearch', 'linkedResellerId']);
         $this->category        = 'item_purchase';
@@ -69,6 +76,7 @@ class ExpenseManager extends Component
 
     public function openEdit(int $id): void
     {
+        $this->authorizeExpenseManagement();
         $expense = IspExpense::with(['linkedUser', 'linkedReseller'])->findOrFail($id);
         $this->editId          = $expense->id;
         $this->category        = $expense->category;
@@ -87,6 +95,7 @@ class ExpenseManager extends Component
     /** Live-search users as the admin types in the employee name field */
     public function updatedUserSearch(string $value): void
     {
+        $this->authorizeExpenseManagement();
         if (strlen(trim($value)) < 2) {
             $this->userSuggestions = collect();
             return;
@@ -105,6 +114,7 @@ class ExpenseManager extends Component
     /** Called when admin picks a user from the suggestion list */
     public function selectUser(int $userId): void
     {
+        $this->authorizeExpenseManagement();
         $user = User::find($userId);
         if ($user) {
             $this->linkedUserId    = $user->id;
@@ -117,6 +127,7 @@ class ExpenseManager extends Component
     /** Clear the linked user selection */
     public function clearLinkedUser(): void
     {
+        $this->authorizeExpenseManagement();
         $this->linkedUserId    = null;
         $this->userSearch      = '';
         $this->userSuggestions = collect();
@@ -124,6 +135,7 @@ class ExpenseManager extends Component
 
     public function save(): void
     {
+        $this->authorizeExpenseManagement();
         $this->validate([
             'category'     => 'required|in:item_purchase,raw_bill,employee_salary,reseller_payout,miscellaneous',
             'title'        => 'required|string|max:255',
@@ -200,12 +212,14 @@ class ExpenseManager extends Component
 
     public function delete(int $id): void
     {
+        $this->authorizeExpenseManagement();
         IspExpense::findOrFail($id)->delete();
         flash()->success('Expense deleted.');
     }
 
     public function triggerPrint(int $id): void
     {
+        $this->authorizeExpenseManagement();
         $this->printExpense = IspExpense::with(['addedBy', 'linkedUser', 'linkedReseller.user'])->findOrFail($id);
     }
 
@@ -229,6 +243,7 @@ class ExpenseManager extends Component
 
     public function render()
     {
+        $this->authorizeExpenseManagement();
         $query = IspExpense::with(['addedBy', 'linkedUser', 'linkedReseller.user'])
                            ->orderBy('expense_date', 'desc');
 

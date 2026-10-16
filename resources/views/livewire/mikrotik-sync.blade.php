@@ -10,7 +10,7 @@
                     <div class="p-1">
                         <!-- Toggle Button -->
                         <button
-                            @click="isOpen = !isOpen; if (!isOpen) { $wire.set('router_name', ''); $wire.set('ip_address', ''); $wire.set('username', ''); $wire.set('password', ''); $wire.set('ssh_port', ''); $wire.set('api_port', ''); }"
+                            @click="isOpen = !isOpen; if (!isOpen) { $wire.set('router_name', ''); $wire.set('ip_address', ''); $wire.set('username', ''); $wire.set('password', ''); $wire.set('ssh_port', ''); $wire.set('api_port', ''); $wire.set('api_ssl', false); }"
                             class="btn btn-sm btn-primary"
                             type="button">
                             <span x-text="isOpen ? '{{ __('Hide This') }}' : '{{ __('Add Mikrotik') }}'"></span>
@@ -42,8 +42,17 @@
                                         <x-input-error for='ssh_port' />
                                     </div>
                                     <div class="col-12 col-sm-6 col-md-4 col-lg-2">
-                                        <input class="form-control form-control-sm" type="number" id="api_port" wire:model="api_port" placeholder="{{ __('API Port') }}" aria-label="API Port">
+                                        <input class="form-control form-control-sm" type="number" id="api_port" wire:model="api_port" placeholder="{{ __('API Port (8728/8729)') }}" aria-label="API Port">
                                         <x-input-error for='api_port' />
+                                        <small class="text-muted">8728 = API, 8729 = API-SSL (typical)</small>
+                                    </div>
+                                    <div class="col-12 col-sm-6 col-md-4 col-lg-2 d-flex align-items-center">
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" id="api_ssl" wire:model="api_ssl">
+                                            <label class="form-check-label" for="api_ssl">{{ __('API SSL (TLS)') }}</label>
+                                            <small class="d-block text-muted">Enable for API-SSL</small>
+                                        </div>
+                                        <x-input-error for='api_ssl' />
                                     </div>
                                     <div class="col-12 col-sm-6 col-md-4 col-lg-2">
                                         <input class="form-control form-control-sm" type="number" step="any" id="latitude" wire:model="latitude" placeholder="Latitude" aria-label="Latitude">
@@ -95,6 +104,10 @@
                                     <div class="d-flex justify-content-between align-items-center" style="font-size: 0.8rem;">
                                         <span class="text-muted">{{ __('API Port') }}:</span>
                                         <span class="fw-bold text-dark">{{ $router->api_port ?? '-' }}</span>
+                                    </div>
+                                    <div class="d-flex justify-content-between align-items-center" style="font-size: 0.8rem;">
+                                        <span class="text-muted">{{ __('API SSL') }}:</span>
+                                        <span class="badge {{ $router->api_ssl ? 'bg-success-subtle text-success' : 'bg-secondary-subtle text-secondary' }}">{{ $router->api_ssl ? __('Enabled') : __('Disabled') }}</span>
                                     </div>
                                     <div class="d-flex justify-content-between align-items-center pt-2 border-top" style="font-size: 0.8rem;">
                                         <span class="text-muted">{{ __('Customers') }}:</span>

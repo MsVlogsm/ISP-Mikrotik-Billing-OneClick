@@ -23,11 +23,17 @@ class ResellerController extends Controller
         $this->walletService = $walletService;
     }
 
+    private function authorizeResellerManagement(): void
+    {
+        abort_unless(hasAccess(['Super Admin'], ['manage-resellers']), 403, 'You do not have permission to manage resellers.');
+    }
+
     /**
      * Display a listing of the resellers.
      */
     public function index()
     {
+        $this->authorizeResellerManagement();
         $month = request('month', now()->month);
         $year  = request('year', now()->year);
 
@@ -74,6 +80,7 @@ class ResellerController extends Controller
      */
     public function create()
     {
+        $this->authorizeResellerManagement();
         $packages = PackageList::whereNull('reseller_id')->get();
         $resellerPermissions = $this->getResellerPermissions();
         $defaultPermissions  = $this->getDefaultPermissions();
@@ -85,6 +92,7 @@ class ResellerController extends Controller
      */
     public function store(Request $request)
     {
+        $this->authorizeResellerManagement();
         $allowedPermissions = array_keys(array_merge(...array_values($this->getResellerPermissions())));
 
         $request->validate([
@@ -95,6 +103,7 @@ class ResellerController extends Controller
             'company' => 'nullable|string|max:255',
             'commission_percentage' => 'required|numeric|min:0|max:100',
             'status' => 'required|in:active,suspended',
+            'panel_type' => 'required|in:standard,mac',
             'packages' => 'nullable|array',
             'packages.*' => 'exists:package_lists,id',
             'permissions' => 'nullable|array',
@@ -126,6 +135,7 @@ class ResellerController extends Controller
                 'commission_percentage' => $request->commission_percentage,
                 'balance' => 0.00,
                 'status' => $request->status,
+                'panel_type' => $request->panel_type,
                 'phone' => $request->mobile,
                 'settings' => [
                     'allow_fixed_voucher' => (bool) $request->allow_fixed_voucher,
@@ -141,7 +151,7 @@ class ResellerController extends Controller
             }
 
             // 4. Sync permissions
-            $selectedPermissions = $request->input('permissions', []);
+            $selectedPermissions = $request->panel_type === 'mac' ? [] : $request->input('permissions', []);
             $user->syncPermissions($selectedPermissions);
 
             // Log activity
@@ -165,6 +175,7 @@ class ResellerController extends Controller
      */
     public function edit(Reseller $reseller)
     {
+        $this->authorizeResellerManagement();
         $reseller->load('user', 'assignedPackages');
         $packages = PackageList::whereNull('reseller_id')->get();
         $assignedPackageIds = $reseller->assignedPackages->pluck('id')->toArray();
@@ -208,6 +219,7 @@ class ResellerController extends Controller
      */
     public function update(Request $request, Reseller $reseller)
     {
+        $this->authorizeResellerManagement();
         $allowedPermissions = array_keys(array_merge(...array_values($this->getResellerPermissions())));
 
         $request->validate([
@@ -218,6 +230,7 @@ class ResellerController extends Controller
             'company' => 'nullable|string|max:255',
             'commission_percentage' => 'required|numeric|min:0|max:100',
             'status' => 'required|in:active,suspended',
+            'panel_type' => 'required|in:standard,mac',
             'packages' => 'nullable|array',
             'packages.*' => 'exists:package_lists,id',
             'permissions' => 'nullable|array',
@@ -266,6 +279,7 @@ class ResellerController extends Controller
                 'company' => $request->company,
                 'commission_percentage' => $request->commission_percentage,
                 'status' => $request->status,
+                'panel_type' => $request->panel_type,
                 'phone' => $request->mobile,
                 'settings' => [
                     'allow_fixed_voucher' => (bool) $request->allow_fixed_voucher,
@@ -279,7 +293,7 @@ class ResellerController extends Controller
             $reseller->assignedPackages()->sync($request->packages ?? []);
 
             // Sync permissions
-            $selectedPermissions = $request->input('permissions', []);
+            $selectedPermissions = $request->panel_type === 'mac' ? [] : $request->input('permissions', []);
             $reseller->user->syncPermissions($selectedPermissions);
 
             // Log activity
@@ -309,6 +323,7 @@ class ResellerController extends Controller
      */
     public function destroy(Reseller $reseller)
     {
+        $this->authorizeResellerManagement();
         DB::beginTransaction();
         try {
             $user = $reseller->user;
@@ -337,6 +352,7 @@ class ResellerController extends Controller
      */
     public function adjustBalance(Request $request, Reseller $reseller)
     {
+        $this->authorizeResellerManagement();
         $request->validate([
             'amount' => 'required|numeric|min:0.01',
             'type' => 'required|in:credit,debit,payout',
@@ -470,6 +486,7 @@ class ResellerController extends Controller
      */
     public function getTransactionsJson(Request $request, Reseller $reseller)
     {
+        $this->authorizeResellerManagement();
         $startDate = $request->query('start_date');
         $endDate = $request->query('end_date');
         $txType = $request->query('tx_type');

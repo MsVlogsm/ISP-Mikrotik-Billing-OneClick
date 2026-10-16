@@ -6,6 +6,7 @@ use App\Models\BillingInfo;
 use App\Models\CustomersInfo;
 use App\Models\PaymentSummary;
 use App\Models\PPPSecrets;
+use App\Models\RouterList;
 use Carbon\Carbon;
 use DataTables;
 use Illuminate\Http\Request;
@@ -158,6 +159,8 @@ class CustomersController extends Controller
      */
     public function edit(string $id)
     {
+        abort_unless(hasAccess(['Super Admin'], ['edit-customer']), 403, 'You do not have permission to edit customers.');
+
         return view('edit-customer', [
             'customerId' => $id, // Send customerId to the Blade file
         ]);
@@ -165,115 +168,136 @@ class CustomersController extends Controller
 
     public function customerEnable(string $id)
     {
-        $unique_id = decrypt($id);
-        $bill = BillingInfo::where('customer_bill_unique_id', $unique_id)->first();
+        abort_unless(hasAccess(['Super Admin'], ['enable-customer', 'enable-pending-customer']), 403, 'You do not have permission to enable customers.');
 
-        if (! $bill) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Billing Information not found',
-            ]);
+        try {
+            $uniqueId = decrypt($id);
+        } catch (\Throwable $e) {
+            abort(404, 'Invalid customer ID.');
         }
 
-        $customer = CustomersInfo::where('customer_unique_id', $unique_id)
-            ->with('pppUser')
-            ->first();
+        $bill = BillingInfo::where('customer_bill_unique_id', $uniqueId)->first();
+        if (! $bill) {
+            return response()->json(['success' => false, 'message' => 'Billing Information not found']);
+        }
 
+        $customer = CustomersInfo::where('customer_unique_id', $uniqueId)->with('pppUser')->first();
         if (! $customer) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Customer not found',
-            ]);
+            return response()->json(['success' => false, 'message' => 'Customer not found']);
+        }
+
+        if (! in_array($customer->status, ['pending', 'disable'], true)) {
+            return response()->json(['success' => false, 'message' => 'Only pending or disabled customers can be enabled']);
         }
 
         try {
-            \DB::beginTransaction();
+            \DB::transaction(function () use ($uniqueId, $bill, $customer) {
+                $summaryExists = PaymentSummary::where('customer_payment_unique_id', $uniqueId)
+                    ->where('summary_date', Carbon::now()->firstOfMonth()->format('Y-m-d'))
+                    ->exists();
 
-            // 1. If Payment Summary does not exist for this month, create it
-            $summaryExists = PaymentSummary::where('customer_payment_unique_id', $unique_id)
-                ->where('summary_date', Carbon::now()->firstOfMonth()->format('Y-m-d'))
-                ->exists();
-
-            if (! $summaryExists) {
-                PaymentSummary::create([
-                    'customer_payment_unique_id' => $unique_id,
-                    'summary_date' => Carbon::now()->firstOfMonth()->format('Y-m-d'),
-                    'monthly_rent' => $bill->monthly_rent,
-                    'additional_charge' => $bill->additional_charge,
-                    'vat' => $bill->vat,
-                    'previous_due' => $bill->previous_due,
-                    'advance' => $bill->advance,
-                    'discount' => $bill->discount,
-                ]);
-            }
-
-            // 2. Set customer status to active and reset disable_count
-            $customer->status = 'active';
-            $customer->disable_count = 0;
-            $customer->save();
-
-            // 3. If auto_disable_date * auto_disable_month is equal to or less than today, increment by 1 month as needed
-            if ($bill->auto_disable_date) {
-                $autoDisableDate = Carbon::parse($bill->auto_disable_date)->startOfDay();
-                $autoDisableMonth = $bill->auto_disable_month;
-                $disableDate = $autoDisableDate->copy()->addMonths($autoDisableMonth);
-
-                if ($disableDate->lte(today())) {
-                    while ($disableDate->lte(today())) {
-                        $disableDate->addMonth();
-                    }
-
-                    $bill->auto_disable_date = $disableDate->copy()->subMonths($autoDisableMonth)->toDateString();
-                    $bill->save();
+                if (! $summaryExists) {
+                    PaymentSummary::create([
+                        'customer_payment_unique_id' => $uniqueId,
+                        'summary_date' => Carbon::now()->firstOfMonth()->format('Y-m-d'),
+                        'monthly_rent' => $bill->monthly_rent,
+                        'additional_charge' => $bill->additional_charge,
+                        'vat' => $bill->vat,
+                        'previous_due' => $bill->previous_due,
+                        'advance' => $bill->advance,
+                        'discount' => $bill->discount,
+                    ]);
                 }
-            }
 
-            if ($customer->pppUser) {
-                if (! empty($customer->pppUser->router_name)) {
-                    // 4. Call enablePPPSecret in Mikrotik (throws on failure)
-                    app(MikrotikController::class)->enablePPPSecret(
-                        $unique_id,
-                        $customer->pppUser->router_name,
-                        $customer->pppUser->username
-                    );
-
-                    // 5. Restore the profile on the router
-                    app(MikrotikController::class)->updatePPPSecret(
+                if ($customer->pppUser && filled($customer->pppUser->router_name) && filled($customer->pppUser->username)) {
+                    app(\App\Services\MikrotikPendingActionQueue::class)->supersedePending(
+                        $uniqueId,
                         $customer->pppUser->router_name,
                         $customer->pppUser->username,
-                        'profile',
-                        $customer->pppUser->profile
+                        'enable'
                     );
+                }
 
-                    // 6. Kick any active session (non-critical)
-                    try {
-                        app(MikrotikController::class)->singleWrite(
-                            $customer->pppUser->router_name,
-                            '/ppp active remove [find name="'.$customer->pppUser->username.'"]'
-                        );
-                    } catch (\Exception $e) {
-                        \Log::debug('customerEnable: active session removal skipped: '.$e->getMessage());
+                $customer->status = 'active';
+                $customer->disable_count = 0;
+                $customer->save();
+
+                if ($bill->auto_disable_date) {
+                    $autoDisableDate = Carbon::parse($bill->auto_disable_date)->startOfDay();
+                    $autoDisableMonth = (int) ($bill->auto_disable_month ?? 0);
+                    $disableDate = $autoDisableDate->copy()->addMonths($autoDisableMonth);
+
+                    if ($disableDate->lte(today())) {
+                        while ($disableDate->lte(today())) {
+                            $disableDate->addMonth();
+                        }
+                        $bill->auto_disable_date = $disableDate->copy()->subMonths($autoDisableMonth)->toDateString();
+                        $bill->save();
                     }
                 }
 
-                // 7. Sync ppp_secrets.status
-                PPPSecrets::where('id', $customer->ppp_user_id)->update(['status' => 'active']);
-            }
+                if ($customer->pppUser) {
+                    PPPSecrets::whereKey($customer->ppp_user_id)->update(['status' => 'active']);
+                }
+            });
 
-            \DB::commit();
+            $routerSyncPending = false;
+            $ppp = $customer->pppUser;
+            if ($ppp && filled($ppp->router_name) && filled($ppp->username)) {
+                $routerConnected = RouterList::where('router_name', $ppp->router_name)
+                    ->where('action', 'connected')
+                    ->exists();
+
+                if ($routerConnected) {
+                    try {
+                        $mikrotik = app(MikrotikController::class);
+                        $mikrotik->enablePPPSecret($uniqueId, $ppp->router_name, $ppp->username);
+                        if (filled($ppp->profile)) {
+                            $mikrotik->updatePPPSecret($ppp->router_name, $ppp->username, 'profile', $ppp->profile);
+                        }
+                        try {
+                            $mikrotik->singleWrite($ppp->router_name, '/ppp active remove [find name='.$mikrotik->mtQuote($ppp->username).']');
+                        } catch (\Throwable $e) {
+                            \Log::debug('customerEnable: active session removal skipped: '.$e->getMessage());
+                        }
+                    } catch (\Throwable $e) {
+                        $routerSyncPending = true;
+                        \Log::warning('Customer enabled locally; MikroTik activation queued after router failure', [
+                            'customer_unique_id' => $uniqueId,
+                            'router' => $ppp->router_name,
+                            'username' => $ppp->username,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                } else {
+                    $routerSyncPending = true;
+                }
+
+                if ($routerSyncPending) {
+                    app(\App\Services\MikrotikPendingActionQueue::class)->queue(
+                        $uniqueId,
+                        $ppp->router_name,
+                        $ppp->username,
+                        'enable'
+                    );
+                }
+            }
 
             return response()->json([
                 'success' => true,
-                'message' => 'Customer enabled successfully'.($customer->pppUser ? ' and PPP secret activated' : ''),
+                'message' => $routerSyncPending
+                    ? 'Customer enabled locally. MikroTik activation is queued until the router is available.'
+                    : 'Customer enabled successfully'.($ppp ? ' and PPP secret activated' : ''),
+                'router_sync_pending' => $routerSyncPending,
             ]);
-        } catch (\Exception $e) {
-            \DB::rollBack();
-            \Log::error("customerEnable failed for {$unique_id}: ".$e->getMessage());
+        } catch (\Throwable $e) {
+            \Log::error("customerEnable failed for {$uniqueId}: ".$e->getMessage());
+            report($e);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to enable customer on router. Please try again.',
-            ]);
+                'message' => 'Failed to enable customer. Please try again.',
+            ], 500);
         }
     }
 
@@ -282,6 +306,8 @@ class CustomersController extends Controller
      */
     public function update(Request $request, string $id)
     {
+        abort_unless(hasAccess(['Super Admin'], ['update-bill']), 403, 'You do not have permission to update billing information.');
+
         // return response()->json(\decrypt($id));
         try {
             BillingInfo::where('customer_bill_unique_id', decrypt($id))->update([
@@ -307,6 +333,8 @@ class CustomersController extends Controller
      */
     public function destroy(string $id)
     {
+        abort_unless(hasAccess(['Super Admin'], ['delete-customer']), 403, 'You do not have permission to delete customers.');
+
         try {
             // Decrypt the ID
             $decryptedId = decrypt($id);

@@ -29,6 +29,62 @@ class AddressSetup extends Component
 
     public $addressFieldId; // Track the ID of the AddressField being edited
 
+    public array $standardAddressLabels = [
+        'Present Address',
+        'Floor / Flat',
+        'Road',
+        'House',
+        'Area',
+        'Zone',
+        'District',
+        'Thana / Upazila',
+        'Other Thana / Upazila',
+        'POP',
+        'Distribution Location Point',
+        'Network Location',
+    ];
+
+    public function selectStandardAddressLabel($label): void
+    {
+        if (! in_array($label, $this->standardAddressLabels, true)) {
+            return;
+        }
+
+        $this->label = $label;
+
+        // If the standard field already exists, load it for option management
+        // instead of creating a duplicate record.
+        $existing = AddressField::where('label', $label)->first();
+        $this->addressFieldId = $existing?->id;
+        $this->required = (bool) ($existing?->required ?? false);
+        $this->print_preview = (bool) ($existing?->print_preview ?? false);
+        $this->complain_preview = (bool) ($existing?->complain_preview ?? false);
+
+        // Keep standard address fields consistent with their intended UI input.
+        $dropdownFields = [
+            'Zone', 'District', 'Thana / Upazila', 'Other Thana / Upazila',
+            'POP', 'Distribution Location Point', 'Network Location',
+        ];
+
+        if (in_array($label, $dropdownFields, true)) {
+            $this->input_type = 'dropdown';
+        } elseif ($label === 'Present Address') {
+            $this->input_type = 'textarea';
+        } else {
+            $this->input_type = 'text';
+        }
+
+        if ($label === 'Distribution Location Point') {
+            $this->dropdown_list = ['DC', 'NOC', 'POP'];
+        } elseif ($label === 'Network Location') {
+            $this->dropdown_list = [];
+        } else {
+            $this->dropdown_list = $existing?->input_type === 'dropdown'
+                ? (json_decode($existing->dropdown_list ?: '[]', true) ?: [])
+                : [];
+        }
+    }
+
     public function mount()
     {
         if (! hasAccess(['Super Admin'], ['address-setup'])) {

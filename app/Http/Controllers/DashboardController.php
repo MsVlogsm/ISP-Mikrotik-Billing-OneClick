@@ -9,6 +9,8 @@ use App\Models\HotspotSale;
 use App\Models\PPPSecrets;
 use App\Models\Reseller;
 use App\Models\ResellerCommission;
+use App\Models\SupportTicket;
+use App\Models\KycRequest;
 use Carbon\Carbon;
 
 class DashboardController extends Controller
@@ -19,7 +21,10 @@ class DashboardController extends Controller
     public function index()
     {
         if (auth()->check() && auth()->user()->hasRole('Reseller')) {
-            return redirect()->route('reseller.dashboard');
+            $route = auth()->user()->reseller?->isMacPanel()
+                ? 'mac-reseller.dashboard'
+                : 'reseller.dashboard';
+            return redirect()->route($route);
         }
 
         $results = [];
@@ -63,12 +68,10 @@ class DashboardController extends Controller
         $statusBillingRaw = BillingInfo::join('customers_infos', 'billing_infos.customer_bill_unique_id', '=', 'customers_infos.customer_unique_id')
             ->whereNull('customers_infos.deleted_at')
             ->whereIn('customers_infos.status', ['active', 'free', 'inactive', 'pending'])
-            ->selectRaw('
-                customers_infos.status,
+            ->selectRaw("customers_infos.status,
                 SUM(billing_infos.monthly_rent) as monthly_rent,
                 SUM(billing_infos.advance) as advance,
-                SUM(billing_infos.due_amount) as due_amount
-            ')
+                SUM(billing_infos.due_amount) as due_amount")
             ->groupBy('customers_infos.status')
             ->get()
             ->keyBy('status');
@@ -171,7 +174,23 @@ class DashboardController extends Controller
         $activeCompany = (clone $activeCustomers)->whereNull('reseller_id')->count();
         $activeReseller = (clone $activeCustomers)->whereNotNull('reseller_id')->count();
         $activeCustomerTotal = $activeCompany + $activeReseller;
-        $onlineNow = PPPSecrets::where('status', 'online')->count();
+        // Match the existing Online Customers page: an active billing customer linked to an enabled PPP secret.
+        // This is account readiness, not a live MikroTik active-session measurement.
+        $onlineCompany = (clone $activeCustomers)->whereNull('reseller_id')->whereHas('pppUser', fn ($query) => $query->where('status', 'active'))->count();
+        $onlineReseller = (clone $activeCustomers)->whereNotNull('reseller_id')->whereHas('pppUser', fn ($query) => $query->where('status', 'active'))->count();
+        $onlineNow = $onlineCompany + $onlineReseller;
+        // Live MikroTik telemetry is read-only and independent of RouterList 'connected' UI state.
+        $livePppTelemetry = [
+            'status' => 'unavailable', 'total' => null, 'successful_routers' => 0,
+            'router_count' => 0, 'routers' => [], 'checked_at' => null,
+        ];
+        try {
+            $livePppTelemetry = app(MikrotikController::class)->getLivePppTelemetry();
+        } catch (\Throwable $e) {
+            \Log::debug('Dashboard live PPP session read failed: '.$e->getMessage());
+        }
+        $livePppSessionsByRouter = $livePppTelemetry['routers'] ?? [];
+        $livePppSessions = $livePppTelemetry['total'] ?? null;
 
         // Expired means active accounts whose billing disable/expiry date has passed.
         $expired = BillingInfo::join('customers_infos', 'billing_infos.customer_bill_unique_id', '=', 'customers_infos.customer_unique_id')
@@ -199,6 +218,21 @@ class DashboardController extends Controller
         $weekCollection = (float) $weekPppoe + (float) $weekHotspot;
 
         $mfsKeywords = ['bkash', 'nagad', 'rocket', 'upay', 'sslcommerz', 'mobile', 'mfs', 'sms', 'banking'];
+        $activeTicketStatuses = ['new', 'open', 'pending', 'in_progress'];
+        $openTickets = SupportTicket::whereIn('status', $activeTicketStatuses)->count();
+        $overdueTickets = SupportTicket::whereIn('status', $activeTicketStatuses)
+            ->where('created_at', '<=', Carbon::now()->subDay())->count();
+        $ticketsToday = SupportTicket::whereDate('created_at', $today)->count();
+        $pendingKyc = KycRequest::where('status', 'pending')->count();
+        $kycApprovedMonth = KycRequest::where('status', 'reviewed')
+            ->whereBetween('reviewed_at', [$monthStart, $monthEnd])->count();
+
+        $mfsMethods = ['bkash', 'nagad', 'rocket', 'upay', 'sslcommerz'];
+        $mfsPending = CollectionSummary::whereIn('payment_status', ['pending', 'processing', 'initiated'])
+            ->where(function ($query) use ($mfsMethods) {
+                $query->where('payment_type', 'online')->orWhereIn('payment_method', $mfsMethods);
+            })->count();
+
         $mfsCollection = (float) CollectionSummary::whereBetween('collection_date', [$monthStart, $monthEnd])
             ->where(function ($q) use ($mfsKeywords) {
                 foreach ($mfsKeywords as $keyword) {
@@ -233,8 +267,9 @@ class DashboardController extends Controller
 
         return view('dashboard', compact(
             'results', 'customersData', 'billInformationData', 'systemOverview', 'resellerData',
-            'onlineNow', 'expired', 'lockedDisabled', 'runningDue', 'monthCollection', 'weekCollection',
+            'onlineNow', 'onlineCompany', 'onlineReseller', 'livePppSessions', 'livePppSessionsByRouter', 'livePppTelemetry', 'expired', 'lockedDisabled', 'runningDue', 'monthCollection', 'weekCollection',
             'todayCollection', 'mfsCollection', 'resellerDue', 'activeCustomerTotal', 'activeCompany', 'activeReseller',
+            'openTickets', 'overdueTickets', 'ticketsToday', 'pendingKyc', 'kycApprovedMonth', 'mfsPending',
             'recentTransactions', 'newConnections', 'hotspotCustomers', 'hotspotCardStock', 'attendanceTotal', 'attendanceToday', 'deviceStats', 'monthCollectionPppoe', 'monthCollectionHotspot', 'todayPppoe', 'todayHotspot', 'weekPppoe', 'weekHotspot'
         ));
     }

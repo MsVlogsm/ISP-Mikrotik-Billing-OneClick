@@ -56,8 +56,8 @@
                                     </tr>
                                     <tr>
                                         <td><code>customer_unique_id</code> / <code>customer_id</code> / <code>unique_id</code> / <code>id</code></td>
-                                        <td>{{ __('Optional: Customer Unique ID. If provided, the system will update the ID in all related tables to match this old ID.') }}</td>
-                                        <td><span class="badge bg-secondary">{{ __('Optional') }}</span></td>
+                                        <td>{{ __('Manually supplied Customer Unique ID. Required; the system never generates this ID automatically and will update related references if an existing ID changes.') }}</td>
+                                        <td><span class="badge bg-danger">{{ __('Required') }}</span></td>
                                     </tr>
                                     <tr>
                                         <td><code>name</code> / <code>customer_name</code></td>

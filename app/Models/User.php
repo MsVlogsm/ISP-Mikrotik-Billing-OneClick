@@ -77,10 +77,10 @@ class User extends Authenticatable implements HasAvatar
         if ($this->profile_image) {
             return asset('storage/profile_images/'.$this->profile_image);
         }
-        // If no profile image is set, generate a default avatar
-        $avatarController = new AvatarController;
-
-        return $avatarController->generateAvatar($this->name);
+        // Use the bundled default image when no profile photo exists.
+        // Generating an image during model serialization can fail on read-only
+        // deployments and cause otherwise unrelated pages to return HTTP 500.
+        return asset('images/default.png');
     }
 
     // Define the search scope

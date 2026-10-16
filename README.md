@@ -60,27 +60,6 @@ graph TD
 
 ---
 
-## One-Click Production Installation
-
-This repository is an independent deployment repository. It includes an idempotent installer for a fresh Ubuntu 22.04/24.04 LTS server. The installer configures PHP 8.3+, Composer, Node.js 22, Nginx, MariaDB, Laravel, queue worker, and Laravel scheduler, then verifies both application ports.
-
-### Install
-
-Run as root on a fresh Ubuntu LTS server:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/MsVlogs/ISP-Mikrotik-Billing-OneClick/main/install.sh -o install.sh
-sudo bash install.sh
-```
-
-The installer asks for the company name, domain, and first Super Admin credentials. It creates a dedicated MariaDB database/user, builds frontend assets, runs migrations/seeding, configures Nginx on ports **8081** (billing) and **8082** (customer portal), and starts the queue/scheduler services.
-
-Installation credentials and generated database credentials are saved with mode `0600` in `/root/isp-billing-install-summary.txt`.
-
-### Safety boundary
-
-The installer only deploys the application stack. It does **not** provision MikroTik/OLT devices, change customer network configuration, or reboot network equipment.
-
 ## Getting Started
 
 ### Prerequisites

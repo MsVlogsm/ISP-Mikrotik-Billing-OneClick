@@ -1,7 +1,19 @@
-<div class="zoom-in pb-5" x-data="{ 
+<div class="zoom-in pb-5" x-data="{
     step: @entangle('step'),
     isLarge: window.innerWidth >= 992
 }" x-init="window.addEventListener('resize', () => isLarge = window.innerWidth >= 992)">
+
+    @php
+        $serviceOptionMap = function ($category, $fallback) {
+            try {
+                $items = \App\Models\CompanyServiceOption::where('category', $category)->where('is_active', true)->orderBy('name')->pluck('name', 'code')->toArray();
+                return $items;
+            } catch (\Throwable $e) { return $fallback; }
+        };
+        $connectionTypeOptions = $serviceOptionMap('connection_type', ['fiber'=>__('Fiber'),'wired'=>__('Wired'),'wireless'=>__('Wireless')]);
+        $customerTypeOptions = $serviceOptionMap('customer_type', ['home'=>__('Home'),'commercial'=>__('Commercial'),'Corporate'=>__('Corporate'),'business'=>__('Business')]);
+        $bandwidthTypeOptions = $serviceOptionMap('bandwidth_type', ['shared'=>__('Shared'),'dedicated'=>__('Dedicated')]);
+    @endphp
 
     <x-slot name="header">
         <h2 class="h4 font-weight-bold text-dark mb-0">
@@ -21,7 +33,7 @@
 
                 <!-- Step 1: Personal Info -->
                 <div class="d-flex flex-column align-items-center position-relative flex-shrink-0" style="z-index: 2; cursor: pointer; width: 60px;" @click="$wire.validateStepAndGo(1)">
-                    <div class="rounded-circle d-flex align-items-center justify-content-center fw-bold text-center" 
+                    <div class="rounded-circle d-flex align-items-center justify-content-center fw-bold text-center"
                          style="width: 40px; height: 40px; border: 2px solid; font-size: 0.9rem; transition: all 0.3s;"
                          :style="step >= 1 ? 'background-color: var(--cp-success); border-color: var(--cp-success); color: #fff; box-shadow: 0 0 10px rgba(40, 167, 69, 0.2);' : 'background-color: #fff; border-color: #dee2e6; color: #6c757d;'">
                         <span x-show="step <= 1">1</span>
@@ -32,7 +44,7 @@
 
                 <!-- Step 2: Address -->
                 <div class="d-flex flex-column align-items-center position-relative flex-shrink-0" style="z-index: 2; cursor: pointer; width: 60px;" @click="$wire.validateStepAndGo(2)">
-                    <div class="rounded-circle d-flex align-items-center justify-content-center fw-bold text-center" 
+                    <div class="rounded-circle d-flex align-items-center justify-content-center fw-bold text-center"
                          style="width: 40px; height: 40px; border: 2px solid; font-size: 0.9rem; transition: all 0.3s;"
                          :style="step >= 2 ? 'background-color: var(--cp-success); border-color: var(--cp-success); color: #fff; box-shadow: 0 0 10px rgba(40, 167, 69, 0.2);' : 'background-color: #fff; border-color: #dee2e6; color: #6c757d;'">
                         <span x-show="step <= 2">2</span>
@@ -44,7 +56,7 @@
                 <!-- Step 3: Server Info -->
                 @if(!auth()->user()->hasRole('Reseller'))
                 <div class="d-flex flex-column align-items-center position-relative flex-shrink-0" style="z-index: 2; cursor: pointer; width: 60px;" @click="$wire.validateStepAndGo(3)">
-                    <div class="rounded-circle d-flex align-items-center justify-content-center fw-bold text-center" 
+                    <div class="rounded-circle d-flex align-items-center justify-content-center fw-bold text-center"
                          style="width: 40px; height: 40px; border: 2px solid; font-size: 0.9rem; transition: all 0.3s;"
                          :style="step >= 3 ? 'background-color: var(--cp-success); border-color: var(--cp-success); color: #fff; box-shadow: 0 0 10px rgba(40, 167, 69, 0.2);' : 'background-color: #fff; border-color: #dee2e6; color: #6c757d;'">
                         <span x-show="step <= 3">3</span>
@@ -56,7 +68,7 @@
 
                 <!-- Step 4 / 3: Billing -->
                 <div class="d-flex flex-column align-items-center position-relative flex-shrink-0" style="z-index: 2; cursor: pointer; width: 60px;" @click="$wire.validateStepAndGo(@if(!auth()->user()->hasRole('Reseller')) 4 @else 3 @endif)">
-                    <div class="rounded-circle d-flex align-items-center justify-content-center fw-bold text-center" 
+                    <div class="rounded-circle d-flex align-items-center justify-content-center fw-bold text-center"
                          style="width: 40px; height: 40px; border: 2px solid; font-size: 0.9rem; transition: all 0.3s;"
                          :style="step >= @if(!auth()->user()->hasRole('Reseller')) 4 @else 3 @endif ? 'background-color: var(--cp-success); border-color: var(--cp-success); color: #fff; box-shadow: 0 0 10px rgba(40, 167, 69, 0.2);' : 'background-color: #fff; border-color: #dee2e6; color: #6c757d;'">
                         <span x-show="step <= @if(!auth()->user()->hasRole('Reseller')) 4 @else 3 @endif">@if(!auth()->user()->hasRole('Reseller')) 4 @else 3 @endif</span>
@@ -67,7 +79,7 @@
 
                 <!-- Step 5 / 4: Office Info -->
                 <div class="d-flex flex-column align-items-center position-relative flex-shrink-0" style="z-index: 2; cursor: pointer; width: 60px;" @click="$wire.validateStepAndGo(@if(!auth()->user()->hasRole('Reseller')) 5 @else 4 @endif)">
-                    <div class="rounded-circle d-flex align-items-center justify-content-center fw-bold text-center" 
+                    <div class="rounded-circle d-flex align-items-center justify-content-center fw-bold text-center"
                          style="width: 40px; height: 40px; border: 2px solid; font-size: 0.9rem; transition: all 0.3s;"
                          :style="step === @if(!auth()->user()->hasRole('Reseller')) 5 @else 4 @endif ? 'background-color: var(--cp-success); border-color: var(--cp-success); color: #fff; box-shadow: 0 0 10px rgba(40, 167, 69, 0.2);' : 'background-color: #fff; border-color: #dee2e6; color: #6c757d;'">
                         <span>@if(!auth()->user()->hasRole('Reseller')) 5 @else 4 @endif</span>
@@ -80,7 +92,9 @@
 
     <!-- Main Stack Form -->
     <form wire:submit.prevent="save">
-        <div class="row g-3"> 
+        <link rel="stylesheet" href="{{ asset('vendor/leaflet/leaflet.css') }}">
+        <script src="{{ asset('vendor/leaflet/leaflet.js') }}"></script>
+        <div class="row g-3">
             <!-- Step 1: Customer Information -->
             <div class="col-12" x-show="isLarge || step === 1" x-transition.opacity>
                 <x-mikrotik.section-form :class="'row'">
@@ -93,6 +107,13 @@
                             name="customer_name"
                             type="text"
                             placeholder="{{ __('Customer Name (eg. Mr. John Doe)') }}"
+                            required="true"
+                        />
+                        <x-mikrotik.form-group
+                            label="{{ __('Customer Unique Id') }}"
+                            name="customer_unique_id"
+                            type="text"
+                            placeholder="{{ __('Enter Customer Unique Id manually') }}"
                             required="true"
                         />
                         <x-mikrotik.form-group
@@ -110,6 +131,7 @@
                             label="{{ __('Mobile Number') }}"
                             type="mobile"
                             name="mobile"
+                            placeholder="01XXXXXXXXX"
                         />
                         <x-mikrotik.form-group
                             label="{{ __('Alternate Mobile Number') }}"
@@ -140,14 +162,27 @@
                         @endif
                     </x-slot>
                     <div class="row g-3 mt-1">
-                        <div class="col-md-6">
-                            <x-mikrotik.form-group label="Latitude" type="text" name="latitude" placeholder="23.8103" />
+                        <div class="col-lg-4">
+                            <div class="mb-3">
+                                <label for="new-customer-latitude" class="form-label">Latitude</label>
+                                <input id="new-customer-latitude" type="text" class="form-control" wire:model="latitude" placeholder="23.8103" inputmode="decimal">
+                                @error('latitude') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
+                            </div>
+                            <div class="mb-3">
+                                <label for="new-customer-longitude" class="form-label">Longitude</label>
+                                <input id="new-customer-longitude" type="text" class="form-control" wire:model="longitude" placeholder="90.4125" inputmode="decimal">
+                                @error('longitude') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
+                            </div>
+                            <div class="alert alert-info small mb-0">
+                                <i class="bi bi-info-circle me-1"></i>
+                                Click anywhere on the map to set the customer's exact Network Location.
+                            </div>
                         </div>
-                        <div class="col-md-6">
-                            <x-mikrotik.form-group label="Longitude" type="text" name="longitude" placeholder="90.4125" />
+                        <div class="col-lg-8">
+                            <div id="new-customer-network-map" wire:ignore style="height:360px;border:1px solid #dee2e6;border-radius:10px;overflow:hidden;background:#f8f9fa;"></div>
                         </div>
                     </div>
-                    <small class="text-muted d-block mt-2">Enter GPS coordinates to show this customer on Network Monitoring.</small>
+                    <small class="text-muted d-block mt-2">The selected coordinates will be stored with this customer and used by Network Monitoring / Map views.</small>
                     <x-section-border/>
                 </x-mikrotik.section-form>
             </div>
@@ -333,13 +368,13 @@
                     </x-slot>
                     <x-slot name="aside">
                         <x-mikrotik.form-group
-                            label="{{ __('Package Name') }}"
+                            label="{{ __('Package Plan') }}"
                             type="dropdown"
                             name="package_name"
-                            wChange="calculateTotal('package_name')"
-                            placeholder="{{ __('Select Any One') }}"
+                            placeholder="{{ __('Select Package Plan') }}"
                             required="true"
-                            :options="$packages->pluck('package')->toArray()"
+                            live="true"
+                            :options="$packages->pluck('package')->unique()->values()->toArray()"
                         />
                         <x-mikrotik.form-group
                             label="{{ __('Monthly Charge') }}"
@@ -408,28 +443,21 @@
                             type="radio"
                             column="col-md-4 col-sm-4"
                             name="connection_type"
-                            :options="['fiber' => __('Fiber'), 'wired' => __('Wired'), 'wireless' => __('Wireless')]"
+                            :options="$connectionTypeOptions"
                         />
                         <x-mikrotik.form-group
                             label="{{ __('Type of Connectivity') }}"
                             type="radio"
                             column="col-md-4 col-sm-4"
                             name="connectivity_type"
-                            :options="['shared' => __('Shared'), 'dedicated' => __('Dedicated')]"
+                            :options="$bandwidthTypeOptions"
                         />
                         <x-mikrotik.form-group
                             label="{{ __('Type of Client') }}"
                             type="dropdownKey"
                             name="client_type"
                             placeholder="{{ __('Select Any One') }}"
-                            :options="['home' => __('Home'),'commercial' => __('Commercial'),'Corporate' => __('Corporate'), 'business' => __('Business')]"
-                        />
-                        <x-mikrotik.form-group
-                            label="{{ __('Distribution Location Point') }}"
-                            type="dropdownKey"
-                            name="distribution_location"
-                            placeholder="{{ __('Select Any One') }}"
-                            :options="['DC' => 'DC', 'NOC' => 'NOC', 'POP'=>'POP']"
+                            :options="$customerTypeOptions"
                         />
                         <x-mikrotik.form-group
                             label="{{ __('Description') }}"
@@ -505,7 +533,57 @@
             </div>
 
         </div>
-    </form>
+
+
+@script
+<script>
+(function () {
+    const root = document.currentScript?.closest('[wire\\:id]') || document;
+    const mapEl = root.querySelector('#new-customer-network-map');
+    const latEl = root.querySelector('#new-customer-latitude');
+    const lngEl = root.querySelector('#new-customer-longitude');
+
+    if (!mapEl || !latEl || !lngEl || typeof L === 'undefined' || mapEl.dataset.initialized === '1') return;
+
+    mapEl.dataset.initialized = '1';
+    const initialLat = Number.parseFloat(latEl.value);
+    const initialLng = Number.parseFloat(lngEl.value);
+    const hasCoords = Number.isFinite(initialLat) && Number.isFinite(initialLng);
+    const center = hasCoords ? [initialLat, initialLng] : [23.8103, 90.4125];
+
+    const map = L.map(mapEl).setView(center, hasCoords ? 16 : 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    let marker = hasCoords ? L.marker(center).addTo(map) : null;
+
+    const syncMarker = (recenter = false) => {
+        const lat = Number.parseFloat(latEl.value);
+        const lng = Number.parseFloat(lngEl.value);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+        const point = [lat, lng];
+        if (!marker) marker = L.marker(point).addTo(map);
+        else marker.setLatLng(point);
+        if (recenter) map.setView(point, Math.max(map.getZoom(), 16));
+    };
+
+    map.on('click', (event) => {
+        latEl.value = event.latlng.lat.toFixed(7);
+        lngEl.value = event.latlng.lng.toFixed(7);
+        latEl.dispatchEvent(new Event('input', { bubbles: true }));
+        lngEl.dispatchEvent(new Event('input', { bubbles: true }));
+        syncMarker(false);
+    });
+
+    latEl.addEventListener('input', () => syncMarker(true));
+    lngEl.addEventListener('input', () => syncMarker(true));
+
+    setTimeout(() => map.invalidateSize(), 100);
+})();
+</script>
+@endscript
+</form>
 </div>
 
 @push('scripts')

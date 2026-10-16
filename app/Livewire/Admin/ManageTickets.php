@@ -4,7 +4,7 @@ namespace App\Livewire\Admin;
 
 use App\Models\NotificationLogs;
 use App\Models\SupportTicket;
-use Codepagol\SmsBridge\Facades\SmsBridge;
+use XLink\SmsBridge\Facades\SmsBridge;
 use Livewire\Attributes\On;
 use Livewire\Component;
 use Livewire\WithoutUrlPagination;

@@ -23,6 +23,11 @@ class ManagePurchaseRequests extends Component
         'statusFilter' => ['except' => ''],
     ];
 
+    private function authorizePurchaseRequestManagement(): void
+    {
+        abort_unless(hasAccess(['Super Admin'], ['manage-purchase-requests']), 403, 'You do not have permission to manage purchase requests.');
+    }
+
     public function updatingSearch()
     {
         $this->resetPage();
@@ -35,6 +40,7 @@ class ManagePurchaseRequests extends Component
 
     public function changeStatus($id, $status)
     {
+        $this->authorizePurchaseRequestManagement();
         $request = PackagePurchaseRequest::findOrFail($id);
         $request->update(['status' => $status]);
         
@@ -43,6 +49,7 @@ class ManagePurchaseRequests extends Component
 
     public function openDetailModal($id)
     {
+        $this->authorizePurchaseRequestManagement();
         $request = PackagePurchaseRequest::findOrFail($id);
         $this->selectedRequestId = $request->id;
         $this->selectedRequestNotes = $request->notes ?? '';
@@ -52,6 +59,7 @@ class ManagePurchaseRequests extends Component
 
     public function saveDetails()
     {
+        $this->authorizePurchaseRequestManagement();
         $request = PackagePurchaseRequest::findOrFail($this->selectedRequestId);
         $request->update([
             'notes' => $this->selectedRequestNotes,
@@ -64,12 +72,14 @@ class ManagePurchaseRequests extends Component
 
     public function delete($id)
     {
+        $this->authorizePurchaseRequestManagement();
         PackagePurchaseRequest::findOrFail($id)->delete();
         flash()->success("Request deleted successfully.");
     }
 
     public function render()
     {
+        $this->authorizePurchaseRequestManagement();
         $query = PackagePurchaseRequest::latest();
 
         if ($this->search) {

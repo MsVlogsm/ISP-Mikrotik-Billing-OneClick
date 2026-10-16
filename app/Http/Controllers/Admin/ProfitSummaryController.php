@@ -13,6 +13,7 @@ class ProfitSummaryController extends Controller
 {
     public function index()
     {
+        abort_unless(hasAccess(['Super Admin'], ['view-profit-summary']), 403, 'You do not have permission to view profit summaries.');
         $month = (int) request('month', now()->month);
         $year  = (int) request('year',  now()->year);
 

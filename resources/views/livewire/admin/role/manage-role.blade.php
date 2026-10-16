@@ -3,6 +3,60 @@
         {{ __('Manage Roles') }}
     </x-slot>
 
+    <div class="card border-0 shadow-sm rounded-4 mb-4">
+        <div class="card-header bg-white border-0 py-3">
+            <h5 class="mb-1 fw-bold text-dark"><i class="bi bi-shield-check text-success me-2"></i>{{ __('Role Permission Matrix') }}</h5>
+            <p class="text-muted small mb-0">{{ __('Default role boundaries. Super Admin can customize Admin and Manager permissions below; Super Admin privilege itself is protected.') }}</p>
+        </div>
+        <div class="table-responsive">
+            <table class="table align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-3" style="min-width: 140px;">{{ __('Role') }}</th>
+                        <th style="min-width: 280px;">{{ __('Can do') }}</th>
+                        <th style="min-width: 280px;">{{ __('Restrictions') }}</th>
+                        <th style="min-width: 130px;">{{ __('Access level') }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach ($roleMatrix as $matrixRole => $definition)
+                        <tr>
+                            <td class="ps-3">
+                                <span class="fw-bold text-dark">{{ $matrixRole }}</span>
+                                <div class="small text-muted">{{ $definition['summary'] ?? '' }}</div>
+                            </td>
+                            <td>
+                                <ul class="small mb-0 ps-3">
+                                    @foreach (($definition['capabilities'] ?? []) as $capability)
+                                        <li class="mb-1">{{ $capability }}</li>
+                                    @endforeach
+                                </ul>
+                            </td>
+                            <td>
+                                <ul class="small mb-0 ps-3">
+                                    @forelse (($definition['restrictions'] ?? []) as $restriction)
+                                        <li class="mb-1">{{ $restriction }}</li>
+                                    @empty
+                                        <li class="text-muted">{{ __('No additional restriction') }}</li>
+                                    @endforelse
+                                </ul>
+                            </td>
+                            <td>
+                                @if ($definition['all'] ?? false)
+                                    <span class="badge bg-success-subtle text-success border">{{ __('Full access') }}</span>
+                                @elseif ($matrixRole === 'Reseller')
+                                    <span class="badge bg-secondary-subtle text-secondary border">{{ __('Own account only') }}</span>
+                                @else
+                                    <span class="badge bg-primary-subtle text-primary border">{{ __('Permission-based') }}</span>
+                                @endif
+                            </td>
+                        </tr>
+                    @endforeach
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     <div class="card border-0 shadow-sm rounded-4">
         <div
             class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center flex-wrap gap-2">

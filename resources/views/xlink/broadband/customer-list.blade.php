@@ -6,7 +6,7 @@
 .broadband-customer-table th{white-space:nowrap;font-size:.78rem;text-transform:uppercase;letter-spacing:.03em}
 .broadband-customer-table td{vertical-align:middle}
 .customer-actions{min-width:145px}.customer-actions form{display:inline}
-.customer-actions .btn{margin:.12rem}.customer-diagnostics{display:inline-flex;align-items:center;gap:.15rem;flex-wrap:wrap}.customer-diagnostic-result{font-size:.75rem;min-height:1.1rem}.traffic-metric{border:1px solid var(--bs-border-color);border-radius:.6rem;padding:.8rem 1rem}.traffic-metric small{display:block;color:var(--bs-secondary-color)}.traffic-metric strong{font-size:1.25rem}.traffic-live-dot{display:inline-block;width:.5rem;height:.5rem;border-radius:50%;background:currentColor;box-shadow:0 0 0 .25rem color-mix(in srgb,currentColor 12%,transparent)}
+.customer-actions .btn{margin:.12rem}.customer-diagnostics{display:inline-flex;align-items:center;gap:.15rem;flex-wrap:wrap}.customer-diagnostic-result{font-size:.75rem;min-height:1.1rem}.traffic-metric{border:1px solid var(--bs-border-color);border-radius:.6rem;padding:.8rem 1rem}.traffic-metric small{display:block;color:var(--bs-secondary-color)}.traffic-metric strong{font-size:1.25rem}.traffic-live-dot{display:inline-block;width:.5rem;height:.5rem;border-radius:50%;background:currentColor;box-shadow:0 0 0 .25rem color-mix(in srgb,currentColor 12%,transparent)}.customer-live-pulse{display:inline-block;width:.55rem;height:.55rem;border-radius:50%;background:#16a34a;animation:customerPulse 1.5s infinite;vertical-align:middle;margin-right:.35rem}@keyframes customerPulse{0%{box-shadow:0 0 0 0 rgba(22,163,74,.55)}70%{box-shadow:0 0 0 .4rem rgba(22,163,74,0)}100%{box-shadow:0 0 0 0 rgba(22,163,74,0)}}@media(prefers-reduced-motion:reduce){.customer-live-pulse{animation:none}}
 .customer-meta{font-size:.78rem}.filter-card .form-label{font-size:.78rem;font-weight:600;color:#6c757d}
 </style>
 @endpush
@@ -14,7 +14,7 @@
 @php
     $title = match($mode) {
         'due' => 'Due Customers',
-        'inactive' => 'Inactive Customers',
+        'inactive' => 'Left Customers',
         'unverified' => 'Unverified Customers',
         'online' => 'Online Customers',
         default => 'Customer List',
@@ -41,12 +41,37 @@
         </div>
     </div>
 
+    @if($mode === 'inactive' && is_array($leftStats))
+        <div class="row g-2 mb-3" aria-label="Left customer summary">
+            <div class="col-6 col-xl-3">
+                <div class="card shadow-sm border-0 h-100"><div class="card-body py-3">
+                    <div class="small text-muted">Total Left Customers</div><div class="fs-4 fw-bold">{{ number_format($leftStats['total'] ?? 0) }}</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-xl-3">
+                <div class="card shadow-sm border-0 h-100"><div class="card-body py-3">
+                    <div class="small text-muted">Pending / Partial Recovery</div><div class="fs-4 fw-bold text-warning">{{ number_format($leftStats['pending_recovery'] ?? 0) }}</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-xl-3">
+                <div class="card shadow-sm border-0 h-100"><div class="card-body py-3">
+                    <div class="small text-muted">Recovered</div><div class="fs-4 fw-bold text-success">{{ number_format($leftStats['recovered'] ?? 0) }}</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-xl-3">
+                <div class="card shadow-sm border-0 h-100"><div class="card-body py-3">
+                    <div class="small text-muted">Recovery Issues</div><div class="fs-4 fw-bold text-danger">{{ number_format($leftStats['issues'] ?? 0) }}</div>
+                </div></div>
+            </div>
+        </div>
+    @endif
+
     <div class="card shadow-sm border-0 mb-3 filter-card">
         <div class="card-body">
             <form method="GET" class="row g-2">
-                <div class="col-12 col-lg-5">
+                <div class="col-12 col-lg-4">
                     <label class="form-label mb-1">Search customer</label>
-                    <input class="form-control" name="q" value="{{ request('q') }}" placeholder="CID, name, mobile, username, IP, NID, address, MAC/caller ID, router or package">
+                    <input class="form-control" name="q" value="{{ request('q') }}" placeholder="CID, name, mobile, username, IP, NID, address, router or package">
                 </div>
                 <div class="col-6 col-lg-2">
                     <label class="form-label mb-1">Router</label>
@@ -57,6 +82,29 @@
                         @endforeach
                     </select>
                 </div>
+                @if($mode === 'inactive')
+                    <div class="col-6 col-lg-2">
+                        <label class="form-label mb-1">Recovery status</label>
+                        <select class="form-select" name="recovery_status">
+                            <option value="">All recovery statuses</option>
+                            @foreach(['pending'=>'Pending','partial'=>'Partially recovered','recovered'=>'Recovered','not_required'=>'Not required','issue'=>'Recovery issue'] as $value=>$label)
+                                <option value="{{ $value }}" @selected(request('recovery_status') === $value)>{{ $label }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="col-6 col-lg-2">
+                        <label class="form-label mb-1">Zone / Area</label>
+                        <input class="form-control" name="zone_name" value="{{ request('zone_name') }}" placeholder="Zone">
+                    </div>
+                    <div class="col-6 col-lg-2">
+                        <label class="form-label mb-1">Left from</label>
+                        <input class="form-control" type="date" name="left_from" value="{{ request('left_from') }}">
+                    </div>
+                    <div class="col-6 col-lg-2">
+                        <label class="form-label mb-1">Left to</label>
+                        <input class="form-control" type="date" name="left_to" value="{{ request('left_to') }}">
+                    </div>
+                @endif
                 <div class="col-6 col-lg-2">
                     <label class="form-label mb-1">Rows</label>
                     <select class="form-select" name="rows">
@@ -75,15 +123,20 @@
 
     <div class="card shadow-sm border-0">
         <div class="card-header bg-transparent d-flex justify-content-between align-items-center">
-            <strong>Customer List</strong>
+            <strong>{{ $mode === 'inactive' ? 'Left Customer Register' : 'Customer List' }}</strong>
             <span class="text-muted small">{{ number_format($customers->total()) }} records</span>
         </div>
         <div class="table-responsive">
             <table class="table table-hover align-middle mb-0 broadband-customer-table">
                 <thead>
                     <tr>
-                        <th>CID</th><th>Customer</th><th>Connection</th><th>Mobile</th><th>Package</th>
-                        <th>Router</th><th>Billing</th><th>Address / Area</th><th>Status</th><th>Actions</th>
+                        @if($mode === 'inactive')
+                            <th>SL</th><th>C-Code</th><th>Customer</th><th>Mobile</th><th>Zone</th><th>Address</th>
+                            <th>Package</th><th>Server</th><th>Left Date</th><th>Products</th><th>Recovery</th><th>Status</th><th>Left Reason</th><th>Actions</th>
+                        @else
+                            <th>CID</th><th>Customer</th><th>Connection</th><th>Mobile</th><th>Package</th>
+                            <th>Router</th><th>Billing</th><th>Address / Area</th><th>Status</th><th>Actions</th>
+                        @endif
                     </tr>
                 </thead>
                 <tbody>
@@ -96,27 +149,43 @@
                         $statusClass = in_array($status, ['active','online']) ? 'success' : (in_array($status, ['inactive','disable']) ? 'secondary' : 'warning');
                     @endphp
                     <tr>
-                        <td><a class="fw-semibold text-decoration-none" href="{{ route('customers.show', $customerId) }}">{{ $c->customer_unique_id }}</a></td>
-                        <td>
-                            <strong>{{ $c->customer_name ?: 'Unnamed' }}</strong>
-                            <div class="customer-meta text-muted">{{ $c->email ?: 'No email' }}</div>
-                        </td>
-                        <td>
-                            <span class="badge text-bg-{{ $c->pppUser?->service === 'static' ? 'info' : 'secondary' }}">{{ strtoupper($c->pppUser?->service ?: 'N/A') }}</span>
-                            <div class="customer-meta">{{ $connection }}</div>
-                        </td>
-                        <td>{{ $c->mobile ?: '—' }}</td>
-                        <td>{{ $c->package->package ?? $c->pppUser->package_name ?? '—' }}</td>
-                        <td>{{ $c->pppUser->router_name ?? '—' }}</td>
-                        <td>
-                            <div>Bill: {{ number_format($c->billing?->total_amount ?? 0, 2) }} ৳</div>
-                            <div class="{{ ($c->billing?->due_amount ?? 0) > 0 ? 'text-danger' : 'text-success' }}">Due: {{ number_format($c->billing?->due_amount ?? 0, 2) }} ৳</div>
-                        </td>
-                        <td>
-                            <div>{{ $address ?: ($c->address ?: '—') }}</div>
-                            @if($c->pppUser?->router_name)<div class="customer-meta text-muted">{{ $c->pppUser->router_name }}</div>@endif
-                        </td>
-                        <td><span class="badge text-bg-{{ $statusClass }}">{{ ucfirst($status) }}</span></td>
+                        @if($mode === 'inactive')
+                            <td>{{ $customers->firstItem() + $loop->index }}</td>
+                            <td><a class="fw-semibold text-decoration-none" href="{{ route('customers.show', $customerId) }}">{{ $c->customer_unique_id }}</a></td>
+                            <td><strong>{{ $c->customer_name ?: 'Unnamed' }}</strong><div class="customer-meta text-muted">{{ $c->email ?: 'No email' }}</div></td>
+                            <td>{{ $c->mobile ?: '—' }}</td>
+                            <td>{{ $c->zone_name ?: '—' }}</td>
+                            <td>{{ $address ?: ($c->address ?: '—') }}</td>
+                            <td>{{ $c->package->package ?? $c->pppUser->package_name ?? $c->package_name ?? '—' }}</td>
+                            <td>{{ $c->server_label ?: ($c->pppUser->router_name ?? '—') }}</td>
+                            <td>{{ $c->left_date?->format('d M Y') ?: '—' }}</td>
+                            <td>{{ $c->left_equipment ?: 'None' }}</td>
+                            <td>{{ $c->recovery_status ? ucfirst($c->recovery_status) : '—' }}</td>
+                            <td><span class="badge text-bg-{{ $statusClass }}">{{ ucfirst($status) }}</span></td>
+                            <td>{{ $c->left_reason ?: '—' }}</td>
+                        @else
+                            <td><a class="fw-semibold text-decoration-none" href="{{ route('customers.show', $customerId) }}">{{ $c->customer_unique_id }}</a></td>
+                            <td>
+                                <strong>{{ $c->customer_name ?: 'Unnamed' }}</strong>
+                                <div class="customer-meta text-muted">{{ $c->email ?: 'No email' }}</div>
+                            </td>
+                            <td>
+                                <span class="badge text-bg-{{ $c->pppUser?->service === 'static' ? 'info' : 'secondary' }}">{{ strtoupper($c->pppUser?->service ?: 'N/A') }}</span>
+                                <div class="customer-meta">{{ $connection }}</div>
+                            </td>
+                            <td>{{ $c->mobile ?: '—' }}</td>
+                            <td>{{ $c->package->package ?? $c->pppUser->package_name ?? '—' }}</td>
+                            <td>{{ $c->pppUser->router_name ?? '—' }}</td>
+                            <td>
+                                <div>Bill: {{ number_format($c->billing?->total_amount ?? 0, 2) }} ৳</div>
+                                <div class="{{ ($c->billing?->due_amount ?? 0) > 0 ? 'text-danger' : 'text-success' }}">Due: {{ number_format($c->billing?->due_amount ?? 0, 2) }} ৳</div>
+                            </td>
+                            <td>
+                                <div>{{ $address ?: ($c->address ?: '—') }}</div>
+                                @if($c->pppUser?->router_name)<div class="customer-meta text-muted">{{ $c->pppUser->router_name }}</div>@endif
+                            </td>
+                            <td>@if($mode === 'online' && $status === 'active' && strtolower((string) ($c->pppUser?->status ?? '')) === 'active')<span class="customer-live-pulse" title="Confirmed by live MikroTik PPP session" aria-label="Live session confirmed"></span>@endif<span class="badge text-bg-{{ $statusClass }}">{{ ucfirst($status) }}</span></td>
+                        @endif
                         <td class="customer-actions">
                             <div class="customer-diagnostics">
                                 <a class="btn btn-outline-secondary btn-sm" title="View" href="{{ route('customers.show', $customerId) }}"><i class="bi bi-eye"></i></a>
@@ -132,9 +201,10 @@
                                     </button>
                                 @endif
                                 @if($status === 'active' && (auth()->user()->hasRole('Super Admin') || hasAccess(['Super Admin'], ['disable-customer'])))
-                                    <form method="POST" action="{{ route('broadband-customer-disable', $customerId) }}" onsubmit="return confirm('Disable this customer?')">
+                                    <form method="POST" action="{{ route('broadband-customer-disable', $customerId) }}" onsubmit="const reason=prompt('Left reason (optional):'); if(reason===null)return false; this.querySelector('[name=left_reason]').value=reason; return confirm('Disable this customer and move to Left Customers?')">
                                         @csrf
-                                        <button class="btn btn-warning btn-sm" title="Disable"><i class="bi bi-pause-circle"></i></button>
+                                        <input type="hidden" name="left_reason" value="">
+                                        <button class="btn btn-warning btn-sm" title="Disable / Mark Left"><i class="bi bi-pause-circle"></i></button>
                                     </form>
                                 @endif
                                 @if($status !== 'active' && (auth()->user()->hasRole('Super Admin') || hasAccess(['Super Admin'], ['delete-customer'])))
@@ -145,13 +215,38 @@
                                     </form>
                                 @endif
                             </div>
+                            @if($mode === 'inactive' && (auth()->user()->hasRole('Super Admin') || hasAccess(['Super Admin'], ['edit-customer'])))
+                                <details class="mt-2" style="min-width:230px">
+                                    <summary class="small text-primary" style="cursor:pointer">Edit left/recovery details</summary>
+                                    <form method="POST" action="{{ route('broadband-customer-left-details', $customerId) }}" class="border rounded p-2 mt-2 bg-light">
+                                        @csrf @method('PATCH')
+                                        <label class="form-label small mb-1">Zone</label>
+                                        <input class="form-control form-control-sm mb-2" name="zone_name" maxlength="120" value="{{ $c->zone_name }}" placeholder="Zone / area">
+                                        <label class="form-label small mb-1">Server / Router</label>
+                                        <input class="form-control form-control-sm mb-2" name="server_label" maxlength="160" value="{{ $c->server_label ?: ($c->pppUser->router_name ?? '') }}">
+                                        <label class="form-label small mb-1">Left date</label>
+                                        <input class="form-control form-control-sm mb-2" type="date" name="left_date" value="{{ $c->left_date?->format('Y-m-d') }}">
+                                        <label class="form-label small mb-1">Products / equipment</label>
+                                        <textarea class="form-control form-control-sm mb-2" name="left_equipment" rows="2" maxlength="5000" placeholder="ONU, router, adapter, cable...">{{ $c->left_equipment }}</textarea>
+                                        <label class="form-label small mb-1">Recovery status</label>
+                                        <select class="form-select form-select-sm mb-2" name="recovery_status" required>
+                                            @foreach(['pending'=>'Pending','partial'=>'Partially recovered','recovered'=>'Recovered','not_required'=>'Not required','issue'=>'Recovery issue'] as $value=>$label)
+                                                <option value="{{ $value }}" @selected(($c->recovery_status ?: 'pending') === $value)>{{ $label }}</option>
+                                            @endforeach
+                                        </select>
+                                        <label class="form-label small mb-1">Left reason</label>
+                                        <textarea class="form-control form-control-sm mb-2" name="left_reason" rows="2" maxlength="2000">{{ $c->left_reason }}</textarea>
+                                        <button class="btn btn-primary btn-sm w-100">Save details</button>
+                                    </form>
+                                </details>
+                            @endif
                             @if($mode === 'online')
                                 <div class="customer-diagnostic-result text-muted js-ping-result" aria-live="polite"></div>
                             @endif
                         </td>
                     </tr>
                 @empty
-                    <tr><td colspan="10" class="text-center py-5 text-muted">No customers found.</td></tr>
+                    <tr><td colspan="{{ $mode === 'inactive' ? 14 : 10 }}" class="text-center py-5 text-muted">No customers found.</td></tr>
                 @endforelse
                 </tbody>
             </table>

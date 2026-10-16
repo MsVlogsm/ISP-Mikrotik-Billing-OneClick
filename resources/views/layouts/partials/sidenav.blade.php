@@ -7,7 +7,7 @@
                     <span class="toggle-line"></span>
                 </span>
             </button>
-            <a class="navbar-brand me-1 me-sm-3" href="{{url('/')}}">
+            <a class="navbar-brand me-1 me-sm-3" href="{{ route('dashboard') }}">
                 <div class="d-flex align-items-center">
                     {{-- Check if site logo exists and display it, otherwise show site icon or name --}}
                     @if (siteUrlSettings('site_logo'))
@@ -40,7 +40,7 @@
             <span class="toggle-line"></span>
         </span>
     </button>
-    <a class="navbar-brand me-1 me-sm-3" href="{{url('/')}}">
+    <a class="navbar-brand me-1 me-sm-3" href="{{ route('dashboard') }}">
         <div class="d-flex align-items-center">
             @if (siteUrlSettings('site_logo'))
                 <img class="me-2" style="width: 150px; height: auto; max-height: 45px; max-width: 100%; object-fit: contain; flex-shrink: 0;" src="{{ site_image(siteUrlSettings('site_logo')) }}" alt="logo"/>
@@ -75,7 +75,7 @@
                 </span>
             </button>
         </div>
-        <a class="navbar-brand" href="{{url('/')}}">
+        <a class="navbar-brand" href="{{ route('dashboard') }}">
             <div class="d-flex align-items-center {{ siteUrlSettings('site_logo') ? 'py-1' : 'py-3' }}">
                 @if (siteUrlSettings('site_logo'))
                     <img class="me-2" style="width: 150px; height: auto; max-height: 45px; max-width: 100%; object-fit: contain; flex-shrink: 0;" src="{{ site_image(siteUrlSettings('site_logo')) }}" alt="logo"/>

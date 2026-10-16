@@ -449,7 +449,7 @@
             $('body').on('click', '#edit-bill', function() {
                 id = $(this).data('id');
                 $.ajax({
-                    url: "{{ route('customers.show', ':id') }}".replace(':id', id),
+                    url: "{{ route('customers.billing-data', ':id') }}".replace(':id', id),
                     method: 'GET',
                     success: function(response) {
                         // console.log(response);

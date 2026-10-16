@@ -29,6 +29,12 @@ class Register extends BaseRegister
                     ->label('Full Name')
                     ->required()
                     ->maxLength(255),
+                TextInput::make('customer_unique_id')
+                    ->label('Customer Unique Id')
+                    ->helperText('Enter the Customer Unique Id manually. It will not be generated automatically.')
+                    ->required()
+                    ->maxLength(255)
+                    ->unique(CustomersInfo::class, 'customer_unique_id'),
                 TextInput::make('mobile')
                     ->label('Mobile Number')
                     ->required()
@@ -88,23 +94,8 @@ class Register extends BaseRegister
             $pppUser->service = 'pppoe';
             $pppUser->save();
 
-            // 2. Generate customer_unique_id
-            $prefix = siteUrlSettings('customer_id_prefix') ?: 'FCNET';
-            $lastCustomer = CustomersInfo::orderBy('id', 'desc')->value('customer_unique_id');
-            if ($lastCustomer) {
-                if (str_starts_with($lastCustomer, $prefix)) {
-                    $lastId = (int) substr($lastCustomer, strlen($prefix));
-                } else {
-                    if (preg_match('/(\d+)$/', $lastCustomer, $matches)) {
-                        $lastId = (int) $matches[1];
-                    } else {
-                        $lastId = 99;
-                    }
-                }
-                $newId = $prefix . ($lastId + 1);
-            } else {
-                $newId = $prefix . '100';
-            }
+            // 2. Use the manually entered Customer Unique Id. Never auto-generate one.
+            $newId = trim((string) $data['customer_unique_id']);
 
             // 3. Create CustomersInfo
             $customer = new CustomersInfo;

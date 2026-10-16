@@ -62,9 +62,17 @@ class CustomerList extends Component
         }
 
         $this->routers = RouterList::all();
-        $resellers = Reseller::with('user')->get();
+        $resellers = Reseller::with('user')->get()->reject(fn ($reseller) => in_array(trim((string) ($reseller->company ?: $reseller->user?->name)), ['MS Online', 'Mr. Abu Hanif'], true));
 
-        return view('livewire.customer-list', compact('resellers'))->layout('layouts.app');
+        $customerStats = [
+            'total' => CustomersInfo::count(),
+            'active' => CustomersInfo::whereNotIn('status', ['pending', 'disable', 'free', 'inactive'])->count(),
+            'pending' => CustomersInfo::where('status', 'pending')->count(),
+            'disabled' => CustomersInfo::where('status', 'disable')->count(),
+            'free' => CustomersInfo::where('status', 'free')->count(),
+        ];
+
+        return view('livewire.customer-list', compact('resellers', 'customerStats'))->layout('layouts.app');
     }
 
     public function getData(Request $request)
@@ -128,6 +136,15 @@ class CustomerList extends Component
                 $data->whereNotIn('status', $statusFilter);
                 break;
 
+            case 'missing_location':
+                $data->whereNotIn('status', $statusFilter)
+                    ->whereDoesntHave('customerAddress', function ($q) {
+                        $q->where('label_name', 'Network Location')
+                            ->whereNotNull('latitude')
+                            ->whereNotNull('longitude');
+                    });
+                break;
+
             case 'without_collection':
                 $data->whereHas('billing', function ($q) {
                     $q->where('paid_amount', 0);
@@ -164,6 +181,25 @@ class CustomerList extends Component
                 $data->whereNotIn('status', $statusFilter);
         }
 
+        // Read-only live PPPoE status, cached briefly to avoid polling MikroTik per row.
+        $livePppUsers = \Cache::remember('customer-list:live-ppp-usernames-v2', now()->addSeconds(20), function () {
+            $online = [];
+            $controller = app(MikrotikController::class);
+            foreach (RouterList::query()->where('action', 'connected')->get() as $router) {
+                try {
+                    foreach ($controller->getActivePppSessions((string) $router->router_name) as $session) {
+                        $username = trim((string) ($session['name'] ?? ''));
+                        if ($username !== '') {
+                            $online[(string) $router->router_name][mb_strtolower($username)] = true;
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    \Log::debug('Customer list live PPP status unavailable for router '.$router->router_name.': '.$e->getMessage());
+                }
+            }
+            return $online;
+        });
+
         return DataTables::eloquent($data)
             ->addIndexColumn()
             ->addColumn('customer_identity', function ($row) {
@@ -197,12 +233,7 @@ class CustomerList extends Component
                         <span class="badge bg-secondary bg-opacity-10 text-secondary pe-2">'.$row->customer_unique_id.'</span> '.
 
                         (! empty($row->mobile)
-                            ? (function () use ($row) {
-                                $mobile = preg_replace('/\\D+/', '', (string) $row->mobile);
-                                if (str_starts_with($mobile, '00880')) $mobile = substr($mobile, 2);
-                                if (str_starts_with($mobile, '8801') && strlen($mobile) >= 13) $mobile = '0'.substr($mobile, 3);
-                                return '<span class="text-muted"><i class="bi bi-telephone text-success"></i> '.e($mobile ?: $row->mobile).'</span> ';
-                            })()
+                            ? '<span class="text-muted"><i class="bi bi-telephone text-success"></i> '.$row->mobile.'</span> '
                             : '').
 
                         (! empty($row->contact_email)
@@ -260,47 +291,154 @@ class CustomerList extends Component
                        '<div class="text-primary fw-bold" style="font-size: 0.75rem"><i class="bi bi-calendar-x me-1"></i>'.$disableDate.'</div>'.
                        '<div class="text-muted" style="font-size: 0.7rem">Ext: '.($row->billing?->auto_disable_month ?? 0).' Mon</div>';
             })
+            ->addColumn('cid', function ($row) use ($livePppUsers) {
+                $url = route('customer.details', ['id' => encrypt($row->customer_unique_id)]);
+                $username = trim((string) ($row->pppUser?->username ?? ''));
+                $router = (string) ($row->pppUser?->router_name ?? '');
+                $isOnline = $username !== '' && ! empty($livePppUsers[$router][mb_strtolower($username)]);
+                $dotClass = $isOnline ? 'customer-live-dot customer-live-dot--active' : 'customer-live-dot customer-live-dot--inactive';
+                $label = $isOnline ? 'Online now (live MikroTik PPP session)' : 'Offline (not found in live MikroTik PPP sessions)';
+                $liveText = '<small class="d-block '.($isOnline ? 'text-success' : 'text-muted').'">'.($isOnline ? 'Online' : 'Offline').'</small>';
+                return '<span class="customer-cid-live" title="'.e($label).'"><span class="'.e($dotClass).'" aria-label="'.e($label).'"></span>'
+                    .'<a href="'.e($url).'" class="fw-bold text-primary text-decoration-none" title="Open Customer Details">'
+                    .e($row->customer_unique_id)
+                    .'</a>'.$liveText.'</span>';
+            })
+            ->addColumn('customer_name_display', function ($row) {
+                return '<div class="fw-semibold text-dark">'.e($row->customer_name ?? 'N/A').'</div>';
+            })
+            ->addColumn('connection', function ($row) {
+                $username = $row->pppUser?->username;
+                $ip = $row->pppUser?->ppp_remote_ip ?: $row->pppUser?->ip_address;
+                if ($username) {
+                    return '<div><span class="badge bg-secondary-subtle text-secondary">PPPoE</span> <span class="fw-semibold">'.e($username).'</span></div>';
+                }
+                if ($ip) {
+                    return '<div><span class="badge bg-info-subtle text-info-emphasis">STATIC</span> <span class="fw-semibold">'.e($ip).'</span></div>';
+                }
+                return '<span class="text-muted">N/A</span>';
+            })
+            ->addColumn('mobile_display', function ($row) {
+                if (empty($row->mobile)) {
+                    return '<span class="text-muted">—</span>';
+                }
+                $mobile = preg_replace('/\\D+/', '', (string) $row->mobile);
+                if (str_starts_with($mobile, '00880')) {
+                    $mobile = substr($mobile, 2);
+                }
+                if (str_starts_with($mobile, '8801') && strlen($mobile) >= 13) {
+                    $mobile = '0'.substr($mobile, 3);
+                }
+                return '<span class="text-nowrap">'.e($mobile ?: $row->mobile).'</span>';
+            })
+            ->addColumn('package_display', function ($row) {
+                $name = $row->package?->package ?: $row->package_name;
+                $price = $row->billing?->monthly_rent ?? $row->package?->price;
+                return '<div class="fw-semibold">'.e($name ?: 'N/A').'</div>'
+                    .($price !== null ? '<small class="text-muted">'.number_format((float) $price, 2).' ৳</small>' : '');
+            })
+            ->addColumn('billing_date_display', function ($row) {
+                if (! $row->billing?->auto_disable_date) {
+                    return '<span class="text-muted">—</span>';
+                }
+                $date = Carbon::parse($row->billing->auto_disable_date);
+                return '<span class="text-nowrap">Day of '.$date->format('j').'</span>';
+            })
+            ->addColumn('balance_display', function ($row) {
+                $balance = (float) ($row->billing?->due_amount ?? 0);
+                $class = $balance > 0 ? 'text-danger' : 'text-success';
+                return '<span class="fw-bold '.$class.'">'.number_format($balance, 2).' ৳</span>';
+            })
+            ->addColumn('expiry_display', function ($row) {
+                if (! $row->billing?->auto_disable_date) {
+                    return '<span class="text-muted">—</span>';
+                }
+                $date = Carbon::parse($row->billing->auto_disable_date);
+                $class = $date->isPast() && ! in_array($row->status, ['disable', 'inactive'], true) ? 'text-danger' : 'text-dark';
+                return '<span class="fw-semibold text-nowrap '.$class.'">'.$date->format('d M Y').'</span>';
+            })
+            ->addColumn('address_display', function ($row) {
+                $parts = [];
+                foreach ($row->customerAddress as $address) {
+                    if (($address->label_name ?? '') === 'Network Location') continue;
+                    $value = array_filter([$address->input_type_text, $address->input_type_dropdown, $address->input_type_textarea]);
+                    if ($value) $parts[] = implode(', ', $value);
+                }
+                $address = implode(', ', $parts);
+                return $address !== '' ? '<span title="'.e($address).'">'.e($address).'</span>' : '<span class="text-muted">—</span>';
+            })
+            ->addColumn('pop_area', function ($row) {
+                $pop = $row->official?->distribution_location;
+                return $pop ? '<span class="badge bg-light text-dark border">'.e($pop).'</span>' : '<span class="text-muted">—</span>';
+            })
+            ->addColumn('monthly_bill_display', function ($row) {
+                return '<span class="fw-bold text-primary">'.number_format((float) ($row->billing?->monthly_rent ?? 0), 2).' ৳</span>';
+            })
             ->addColumn('action', function ($row) {
                 $id = encrypt($row->customer_unique_id);
+                $viewBtn = '<a href="'.e(route('customer.details', $row->customer_unique_id)).'" class="view btn btn-outline-secondary" title="View Customer"><i class="bi bi-person-vcard"></i></a>';
                 $editBtn = '<button onclick="Livewire.dispatch(\'open-edit-customer\', { id: \''.$id.'\' })" class="edit btn btn-primary" title="Edit"><i class="bi bi-pencil-square"></i></button>';
                 $billBtn = '<button onclick="Livewire.dispatch(\'open-bill-modal\', { id: \''.$id.'\' })" class="bill btn btn-info" title="Update Bill"><i class="bi bi-journal-arrow-up"></i></button>';
                 $enableBtn = '<button onclick="confirmEnableCustomer(\''.$id.'\')" class="btn btn-success" title="Enable"><i class="bi bi-power"></i></button>';
                 $disableBtn = '<button onclick="confirmDisableCustomer(\''.$id.'\')" class="btn btn-warning text-dark" title="Disable"><i class="bi bi-slash-circle"></i></button>';
                 $deleteBtn = '<button onclick="confirmDeleteCustomer(\''.$id.'\')" class="btn btn-danger" title="Delete"><i class="bi bi-trash"></i></button>';
 
-                $btns = '<div class="action-btns d-flex justify-content-center">';
+                $isAdmin = auth()->user()?->hasRole('Super Admin');
+                $canEdit = $isAdmin || hasAccess(['Super Admin'], ['edit-customer']);
+                $canBill = hasAccess(['Super Admin'], ['update-bill']);
+                $canCollect = $isAdmin || hasAccess(['Super Admin'], ['payment-collection', 'update-bill']);
+                $canTicket = $isAdmin || hasAccess(['Super Admin'], ['manage-tickets']);
+                $actionUrl = fn ($action) => route('customer.actions', ['id' => $id, 'action' => $action]);
+                $menu = '<div class="dropdown customer-row-actions">'
+                    .'<button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-lightning-charge me-1"></i>Actions</button>'
+                    .'<ul class="dropdown-menu dropdown-menu-end shadow">'
+                    .'<li><a class="dropdown-item" href="'.e(route('customer.details', $row->customer_unique_id)).'"><i class="bi bi-person-vcard me-2 text-primary"></i>Customer overview</a></li>';
 
-                if (auth()->user()?->hasRole('Super Admin') || hasAccess(['Super Admin'], ['edit-customer'])) {
-                    $btns .= $editBtn;
+                if ($canEdit) {
+                    $menu .= '<li><button class="dropdown-item" type="button" onclick="Livewire.dispatch(\'open-edit-customer\', { id: \''.$id.'\' })"><i class="bi bi-pencil-square me-2 text-primary"></i>Edit customer</button></li>';
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('owner')).'"><i class="bi bi-person-gear me-2"></i>Change owner / package</a></li>';
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('class')).'"><i class="bi bi-tags me-2"></i>Change customer class</a></li>';
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('password')).'"><i class="bi bi-key me-2"></i>Change PPPoE password</a></li>';
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('wifi-login')).'"><i class="bi bi-wifi me-2"></i>Wi-Fi router login</a></li>';
                 }
-
-                if (hasAccess(['Super Admin'], ['update-bill']) && ! in_array($row->status, ['pending', 'disable', 'inactive'], true)) {
-                    $btns .= $billBtn;
+                if ($canBill && ! in_array($row->status, ['pending', 'disable', 'inactive'], true)) {
+                    $menu .= '<li><button class="dropdown-item" type="button" onclick="Livewire.dispatch(\'open-bill-modal\', { id: \''.$id.'\' })"><i class="bi bi-journal-arrow-up me-2 text-info"></i>Update bill</button></li>';
                 }
-
+                if ($canCollect) {
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('ledger')).'"><i class="bi bi-journal-text me-2"></i>Billing ledger</a></li>';
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('cash-credit')).'"><i class="bi bi-cash-coin me-2"></i>Cash / credit / return</a></li>';
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('recharge')).'"><i class="bi bi-calendar-plus me-2"></i>Monthly recharge</a></li>';
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('billing-date')).'"><i class="bi bi-calendar-date me-2"></i>Change billing date</a></li>';
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('grace')).'"><i class="bi bi-hourglass me-2"></i>Extra grace</a></li>';
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('invoice')).'" target="_blank"><i class="bi bi-receipt me-2"></i>Invoice</a></li>';
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('pos-print')).'" target="_blank"><i class="bi bi-printer me-2"></i>POS print</a></li>';
+                }
+                if ($canTicket) {
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('ticket')).'"><i class="bi bi-ticket-perforated me-2"></i>Create support ticket</a></li>';
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('ticket-history')).'"><i class="bi bi-clock-history me-2"></i>Ticket history</a></li>';
+                }
+                if ($canEdit) {
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('sms')).'"><i class="bi bi-chat-dots me-2"></i>Send SMS</a></li>';
+                    $menu .= '<li><a class="dropdown-item" href="'.e($actionUrl('online-graph')).'"><i class="bi bi-graph-up me-2"></i>Online graph</a></li>';
+                }
+                $menu .= '<li><hr class="dropdown-divider"></li>';
                 if (in_array($row->status, ['pending', 'disable'], true)
-                    && (auth()->user()?->hasRole('Super Admin') || hasAccess(['Super Admin'], ['enable-pending-customer', 'enable-customer']))) {
-                    $btns .= $enableBtn;
+                    && ($isAdmin || hasAccess(['Super Admin'], ['enable-pending-customer', 'enable-customer']))) {
+                    $menu .= '<li><button class="dropdown-item text-success" type="button" onclick="confirmEnableCustomer(\''.$id.'\')"><i class="bi bi-power me-2"></i>Enable customer</button></li>';
                 }
-
                 if (! in_array($row->status, ['pending', 'disable', 'inactive'], true)
-                    && (auth()->user()?->hasRole('Super Admin') || hasAccess(['Super Admin'], ['disable-customer']))) {
-                    $btns .= $disableBtn;
+                    && ($isAdmin || hasAccess(['Super Admin'], ['disable-customer']))) {
+                    $menu .= '<li><button class="dropdown-item text-warning" type="button" onclick="confirmDisableCustomer(\''.$id.'\')"><i class="bi bi-slash-circle me-2"></i>Disable customer</button></li>';
                 }
-
-                if (auth()->user()?->hasRole('Super Admin') || hasAccess(['Super Admin'], ['delete-customer'])) {
-                    $btns .= $deleteBtn;
+                if ($row->pppUser && ! empty($row->pppUser->router_name) && hasAccess(['Super Admin'], ['push-customers'])) {
+                    $menu .= '<li><button class="dropdown-item" type="button" onclick="confirmPushCustomer(\''.$id.'\')"><i class="bi bi-cloud-arrow-up me-2"></i>Push to MikroTik</button></li>';
                 }
-
-                if ($row->pppUser && ! empty($row->pppUser->router_name)
-                    && hasAccess(['Super Admin'], ['push-customers'])) {
-                    $pushBtn = '<button onclick="confirmPushCustomer(\''.$id.'\')" class="btn btn-warning text-white ms-1" title="Push to MikroTik"><i class="bi bi-cloud-arrow-up"></i></button>';
-                    $btns .= $pushBtn;
+                if ($isAdmin || hasAccess(['Super Admin'], ['delete-customer'])) {
+                    $menu .= '<li><button class="dropdown-item text-danger" type="button" onclick="confirmDeleteCustomer(\''.$id.'\')"><i class="bi bi-trash me-2"></i>Delete customer</button></li>';
                 }
-
-                return $btns.'</div>';
+                return $menu.'</ul></div>';
             })
-            ->rawColumns(['customer_identity', 'customers_address', 'billing_breakdown', 'connection_details', 'billing_summary', 'action', 'disable_details'])
+            ->rawColumns(['customer_identity', 'customers_address', 'billing_breakdown', 'connection_details', 'billing_summary', 'action', 'disable_details', 'cid', 'customer_name_display', 'connection', 'mobile_display', 'package_display', 'billing_date_display', 'balance_display', 'expiry_display', 'address_display', 'pop_area', 'monthly_bill_display'])
             ->make(true);
     }
 
@@ -388,6 +526,15 @@ class CustomerList extends Component
                     ]);
                 }
 
+                if ($customer->pppUser && filled($customer->pppUser->router_name) && filled($customer->pppUser->username)) {
+                    app(\App\Services\MikrotikPendingActionQueue::class)->supersedePending(
+                        $unique_id,
+                        $customer->pppUser->router_name,
+                        $customer->pppUser->username,
+                        'enable'
+                    );
+                }
+
                 $customer->status = 'active';
                 $customer->save();
 
@@ -414,37 +561,48 @@ class CustomerList extends Component
                 }
             });
 
-            $routerSyncFailed = false;
+            $routerSyncPending = false;
+            $ppp = $customer->pppUser;
 
-            if ($customer->pppUser && ! empty($customer->pppUser->router_name)) {
-                try {
-                    app(MikrotikController::class)->enablePPPSecret(
+            if ($ppp && filled($ppp->router_name) && filled($ppp->username)) {
+                $routerConnected = RouterList::where('router_name', $ppp->router_name)
+                    ->where('action', 'connected')
+                    ->exists();
+
+                if ($routerConnected) {
+                    try {
+                        $mikrotik = app(MikrotikController::class);
+                        $mikrotik->enablePPPSecret($unique_id, $ppp->router_name, $ppp->username);
+                        if (filled($ppp->profile)) {
+                            $mikrotik->updatePPPSecret($ppp->router_name, $ppp->username, 'profile', $ppp->profile);
+                        }
+                    } catch (\Throwable $e) {
+                        $routerSyncPending = true;
+                        \Log::warning('Customer activated locally; MikroTik activation queued after router failure', [
+                            'customer_unique_id' => $unique_id,
+                            'router' => $ppp->router_name,
+                            'username' => $ppp->username,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                } else {
+                    $routerSyncPending = true;
+                }
+
+                if ($routerSyncPending) {
+                    app(\App\Services\MikrotikPendingActionQueue::class)->queue(
                         $unique_id,
-                        $customer->pppUser->router_name,
-                        $customer->pppUser->username
+                        $ppp->router_name,
+                        $ppp->username,
+                        'enable'
                     );
-
-                    app(MikrotikController::class)->updatePPPSecret(
-                        $customer->pppUser->router_name,
-                        $customer->pppUser->username,
-                        'profile',
-                        $customer->pppUser->profile
-                    );
-                } catch (\Throwable $e) {
-                    $routerSyncFailed = true;
-                    \Log::error('Customer activated but MikroTik PPP sync failed', [
-                        'customer_unique_id' => $unique_id,
-                        'router' => $customer->pppUser->router_name,
-                        'username' => $customer->pppUser->username,
-                        'error' => $e->getMessage(),
-                    ]);
                 }
             }
 
-            if ($routerSyncFailed) {
-                flash()->addWarning('Customer activated, but MikroTik sync failed. Please sync the customer from the Push/Sync action.');
+            if ($routerSyncPending) {
+                flash()->addWarning('Customer enabled locally. MikroTik activation is queued until the router is available.');
             } else {
-                flash()->addSuccess($customer->pppUser
+                flash()->addSuccess($ppp
                     ? 'Customer enabled successfully and PPP secret activated.'
                     : 'Customer enabled successfully.');
             }
@@ -572,17 +730,51 @@ class CustomerList extends Component
                 return;
             }
 
-            // Disable the router-side service first. If this fails, do not
-            // mark the customer disabled in the database.
+            // Record disconnected-router work in the same transaction as the local
+            // status update, so a failed DB update cannot leave a stale remote action.
+            $pendingAction = null;
             if ($customer->pppUser && ! empty($customer->pppUser->router_name)) {
-                app(MikrotikController::class)->disablePPPSecret(
-                    $uniqueId,
-                    $customer->pppUser->router_name,
-                    $customer->pppUser->username
-                );
+                $routerName = $customer->pppUser->router_name;
+                $routerConnected = RouterList::where('router_name', $routerName)
+                    ->where('action', 'connected')
+                    ->exists();
+
+                if ($routerConnected) {
+                    try {
+                        app(MikrotikController::class)->disablePPPSecret(
+                            $uniqueId,
+                            $routerName,
+                            $customer->pppUser->username
+                        );
+                    } catch (\Throwable $routerError) {
+                        report($routerError);
+                        $routerConnected = false;
+                    }
+                }
+
+                if (! $routerConnected && filled($customer->pppUser->username)) {
+                    $pendingAction = [
+                        'customer_unique_id' => $uniqueId,
+                        'router_name' => $routerName,
+                        'username' => $customer->pppUser->username,
+                        'action' => 'disable',
+                        'status' => 'pending',
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ];
+                }
             }
 
-            \DB::transaction(function () use ($customer) {
+            $pendingId = \DB::transaction(function () use ($customer, $pendingAction, $uniqueId) {
+                $pendingId = null;
+                if ($customer->pppUser && filled($customer->pppUser->router_name) && filled($customer->pppUser->username)) {
+                    $pendingQueue = app(\App\Services\MikrotikPendingActionQueue::class);
+                    $pendingQueue->supersedePending($uniqueId, $customer->pppUser->router_name, $customer->pppUser->username, 'disable');
+                    if ($pendingAction) {
+                        $pendingId = $pendingQueue->queue($uniqueId, $customer->pppUser->router_name, $customer->pppUser->username, 'disable');
+                    }
+                }
+
                 $customer->status = 'disable';
                 $customer->save();
 
@@ -590,7 +782,18 @@ class CustomerList extends Component
                     PPPSecrets::where('id', $customer->ppp_user_id)
                         ->update(['status' => 'disable']);
                 }
+
+                return $pendingId;
             });
+
+            if ($pendingId) {
+                \Log::warning('Customer disabled locally while router is unavailable; remote action queued', [
+                    'customer_id' => $uniqueId,
+                    'router_name' => $pendingAction['router_name'],
+                    'username' => $pendingAction['username'],
+                    'pending_action_id' => $pendingId,
+                ]);
+            }
 
             flash()->addSuccess('Customer disabled successfully.');
         } catch (\Throwable $e) {
@@ -634,24 +837,69 @@ class CustomerList extends Component
                 return;
             }
 
-            // Perform the router-side removal before deleting local records.
-            // A router failure must not leave the database claiming the customer is deleted.
+            // Keep the queued remote removal atomic with local deletion. Otherwise,
+            // a failed local transaction could still remove a customer's PPP secret later.
             $pppUser = $customerDelete->pppUser;
+            $pendingAction = null;
             if ($pppUser && ! empty($pppUser->router_name)) {
-                app(MikrotikController::class)->removePPPSecret(
-                    $decryptedId,
-                    $pppUser->router_name,
-                    $pppUser->username
-                );
+                $routerName = $pppUser->router_name;
+                $routerConnected = RouterList::where('router_name', $routerName)
+                    ->where('action', 'connected')
+                    ->exists();
+
+                if ($routerConnected) {
+                    try {
+                        app(MikrotikController::class)->removePPPSecret(
+                            $decryptedId,
+                            $routerName,
+                            $pppUser->username
+                        );
+                    } catch (\Throwable $routerError) {
+                        report($routerError);
+                        $routerConnected = false;
+                    }
+                }
+
+                if (! $routerConnected && filled($pppUser->username)) {
+                    $pendingAction = [
+                        'customer_unique_id' => $decryptedId,
+                        'router_name' => $routerName,
+                        'username' => $pppUser->username,
+                        'action' => 'remove',
+                        'status' => 'pending',
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ];
+                }
             }
 
-            \DB::transaction(function () use ($customerDelete, $pppUser) {
+            $pendingId = \DB::transaction(function () use ($customerDelete, $pppUser, $pendingAction, $decryptedId) {
+                $pendingId = null;
+                if ($pppUser && filled($pppUser->router_name) && filled($pppUser->username)) {
+                    $pendingQueue = app(\App\Services\MikrotikPendingActionQueue::class);
+                    $pendingQueue->supersedePending($decryptedId, $pppUser->router_name, $pppUser->username, 'remove');
+                    if ($pendingAction) {
+                        $pendingId = $pendingQueue->queue($decryptedId, $pppUser->router_name, $pppUser->username, 'remove');
+                    }
+                }
+
                 if ($pppUser) {
                     $pppUser->delete();
                 }
 
                 $customerDelete->delete();
+
+                return $pendingId;
             });
+
+            if ($pendingId) {
+                \Log::warning('Customer deleted locally while router is unavailable; remote removal queued', [
+                    'customer_id' => $decryptedId,
+                    'router_name' => $pendingAction['router_name'],
+                    'username' => $pendingAction['username'],
+                    'pending_action_id' => $pendingId,
+                ]);
+            }
 
             flash()->addSuccess('Customer deleted successfully.');
         } catch (\Exception $e) {
@@ -674,6 +922,7 @@ class CustomerList extends Component
         $this->editingCustomerId = is_array($id) ? $id['id'] ?? $id : $id;
     }
 
+    #[On('close-edit-customer')]
     public function closeEditCustomerModal()
     {
         $this->editingCustomerId = null;

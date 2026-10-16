@@ -169,6 +169,9 @@
     <!--    End of Main Content-->
     <!-- ===============================================-->
     @include('layouts.partials.customize')
+    @auth
+        @include('layouts.partials.ai-engineer-floating')
+    @endauth
 
     @stack('modals')
 

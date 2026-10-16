@@ -17,6 +17,7 @@ class Reseller extends Model
         'status',
         'phone',
         'settings',
+        'panel_type',
     ];
 
     protected $casts = [
@@ -111,6 +112,11 @@ class Reseller extends Model
     public function isActive(): bool
     {
         return $this->status === 'active';
+    }
+
+    public function isMacPanel(): bool
+    {
+        return $this->panel_type === 'mac';
     }
 
     /**

@@ -1,4 +1,32 @@
 <div>
+    @if(session('onu_sync_message'))
+        <div class="alert alert-{{ session('onu_sync_success') ? 'success' : 'warning' }} mx-sm-0 mx-md-3 mt-3 mb-0">
+            <strong><i class="bi bi-arrow-repeat me-1"></i> ONU Sync:</strong>
+            <pre class="mb-0 mt-1 text-wrap">{{ session('onu_sync_message') }}</pre>
+        </div>
+    @endif
+    <section class="customer-page-header mx-sm-0 mx-md-3 mt-3 mb-3">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+            <div>
+                <div class="customer-eyebrow"><i class="bi bi-people-fill me-1"></i>{{ __('CUSTOMER MANAGEMENT') }}</div>
+                <h1 class="customer-page-title">{{ __('Customer List') }}</h1>
+                <p class="customer-page-subtitle mb-0">{{ __('Manage customer profiles, connectivity, billing and service actions from one place.') }}</p>
+            </div>
+            <div class="customer-header-actions d-flex flex-wrap gap-2">
+                @if(auth()->user()?->hasRole('Super Admin') || hasAccess(['Super Admin'], ['create-customer']))
+                    <a href="{{ route('customer-add') }}" class="btn btn-primary"><i class="bi bi-person-plus me-1"></i>{{ __('Add Customer') }}</a>
+                @endif
+            </div>
+        </div>
+        <div class="customer-stat-grid">
+            <div class="customer-stat-card"><span class="customer-stat-icon stat-blue"><i class="bi bi-people"></i></span><div><span class="customer-stat-label">{{ __('Total Customers') }}</span><strong>{{ number_format($customerStats['total'] ?? 0) }}</strong></div></div>
+            <div class="customer-stat-card"><span class="customer-stat-icon stat-green"><i class="bi bi-person-check"></i></span><div><span class="customer-stat-label">{{ __('Active') }}</span><strong>{{ number_format($customerStats['active'] ?? 0) }}</strong></div></div>
+            <div class="customer-stat-card"><span class="customer-stat-icon stat-amber"><i class="bi bi-hourglass-split"></i></span><div><span class="customer-stat-label">{{ __('Pending') }}</span><strong>{{ number_format($customerStats['pending'] ?? 0) }}</strong></div></div>
+            <div class="customer-stat-card"><span class="customer-stat-icon stat-red"><i class="bi bi-person-x"></i></span><div><span class="customer-stat-label">{{ __('Disabled') }}</span><strong>{{ number_format($customerStats['disabled'] ?? 0) }}</strong></div></div>
+            <div class="customer-stat-card"><span class="customer-stat-icon stat-violet"><i class="bi bi-gift"></i></span><div><span class="customer-stat-label">{{ __('Free Accounts') }}</span><strong>{{ number_format($customerStats['free'] ?? 0) }}</strong></div></div>
+        </div>
+    </section>
+
     <div class="card border-0 shadow-sm mx-sm-0 mx-md-3 my-3 customer-filter-card">
         <div class="card-body p-3">
             <div class="row align-items-center">
@@ -14,8 +42,7 @@
                     </div>
                 @endif
                 <div class="{{ $routers->count() > 1 ? 'col-md-10' : 'col-md-12' }}">
-                    <label class="small text-muted fw-bold ps-1">{{ __('FILTERS') }}</label>
-                    <div class="d-flex flex-wrap gap-1">
+                    <label class="small text-muted fw-bold ps-1 d-inline">{{ __('FILTERS') }}</label><div class="d-flex flex-nowrap align-items-center gap-0 customer-filter-toolbar d-inline-flex">
                         <div class="filter-group d-flex gap-1 overflow-auto pb-1">
                             <input type="radio" class="btn-check" name="collection" id="all_list" autocomplete="off">
                             <label class="btn btn-outline-primary btn-sm rounded-pill px-3 shadow-none fw-600" for="all_list">
@@ -64,17 +91,13 @@
                                 </label>
                             @endforeach
                         </div>
-                        <div class="ms-auto border-start ps-1 d-flex gap-1">
-                            @if(auth()->user()?->hasRole('Super Admin') || hasAccess(['Super Admin'], ['create-customer']))
-                                <a href="{{ route('customer-add') }}" class="btn btn-primary btn-sm rounded-pill px-3 py-0 shadow-none fw-600" style="height: 2rem;">
-                                    <i class="bi bi-person-plus-fill me-1"></i> {{ __('Add Customer') }}
-                                </a>
-                            @endif
-                            @if(hasAccess(['Super Admin'], ['push-customers']))
-                                <button type="button" onclick="confirmPushAllCustomers()" class="btn btn-outline-warning btn-sm rounded-pill px-3 py-0 shadow-none fw-600" style="height: 2rem;" title="Push all customers to MikroTik">
-                                    <i class="bi bi-cloud-arrow-up-fill me-1"></i> {{ __('Push All') }}
+                        <div class="d-flex flex-nowrap gap-1">
+                            <form method="POST" action="{{ route('network-inventory.olt.sync') }}" class="d-inline" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button span').textContent='Syncing…';">
+                                @csrf
+                                <button type="submit" class="btn btn-outline-success btn-sm rounded-pill px-3 py-0 shadow-none fw-600" style="height: 2rem;" title="Synchronize ONU inventory and customer mappings">
+                                    <i class="bi bi-arrow-repeat me-1"></i><span>Sync ONU</span>
                                 </button>
-                            @endif
+                            </form>
                             <button type="button" id="reset_table" class="btn btn-light btn-outline-dark btn-sm rounded-pill px-3 py-0 shadow-none fw-600" style="height: 2rem;" title="Reset all filters and search">
                                 <i class="bi bi-arrow-clockwise"></i> {{ __('Reset') }}
                             </button>
@@ -90,49 +113,23 @@
             <table class="customer-table table table-hover custom-data-table border-0 w-100" style="width:100%">
                 <thead class="bg-light">
                     <tr>
-                        <th class="text-center">{{ __('SL') }}</th>
-                        <th class="text-center">{{ __('Customer Identity') }}</th>
-                        <th class="text-center">{{ __('Address') }}</th>
-                        <th class="text-center">{{ __('Billing Breakdown') }}</th>
-                        <th class="text-center">{{ __('Connection Info') }}</th>
-                        <th class="text-center">{{ __('Billing Summary') }}</th>
-                        <th class="text-center">{{ __('Auto Disable') }}</th>
-                        <th class="text-center">{{ __('Action') }}</th>
-                        {{-- Raw columns for export (Indices 8-22) --}}
-                        <th class="text-center">{{ __('ID') }}</th>
-                        <th class="text-center">{{ __('Name') }}</th>
-                        <th class="text-center">{{ __('Address') }}</th>
-                        <th class="text-center">{{ __('Mobile') }}</th>
-                        <th class="text-center">{{ __('IP') }}</th>
-                        <th class="text-center">{{ __('Router') }}</th>
-                        <th class="text-center">{{ __('Rent') }}</th>
-                        <th class="text-center">{{ __('P.Due') }}</th>
-                        <th class="text-center">{{ __('Add.') }}</th>
-                        <th class="text-center">{{ __('Vat') }}</th>
-                        <th class="text-center">{{ __('Disc') }}</th>
-                        <th class="text-center">{{ __('Adv') }}</th>
-                        <th class="text-center">{{ __('Bill') }}</th>
-                        <th class="text-center">{{ __('Paid') }}</th>
-                        <th class="text-center">{{ __('Due') }}</th>
+                        <th class="text-center" style="width:36px;"><input type="checkbox" id="select-all-customers" class="form-check-input" title="{{ __('Select All') }}" aria-label="{{ __('Select All') }}"></th>
+                        <th>{{ __('CID') }}</th>
+                        <th>{{ __('Customer') }}</th>
+                        <th>{{ __('Connection') }}</th>
+                        <th>{{ __('Mobile') }}</th>
+                        <th>{{ __('Package') }}</th>
+                        <th>{{ __('Billing Date') }}</th>
+                        <th class="text-end">{{ __('Balance') }}</th>
+                        <th>{{ __('Expiry') }}</th>
+                        <th>{{ __('Address') }}</th>
+                        <th>{{ __('POP / Area') }}</th>
+                        <th class="text-end">{{ __('Monthly Bill') }}</th>
+                        <th class="text-center">{{ __('Actions') }}</th>
                     </tr>
                 </thead>
                 <tbody class="text-center"></tbody>
-                <tfoot class="bg-light border-top">
-                    <tr class="page-totals-row table-info">
-                        @for($i=0; $i<23; $i++)
-                            <th id="page_total_{{ $i }}" @if($i==0) class="text-end fw-bold" @elseif($i==3) class="text-start small" @elseif($i==5) class="text-end" @endif>
-                                @if($i==0) {{ __('Page Totals:') }} @endif
-                            </th>
-                        @endfor
-                    </tr>
-                    <tr class="grand-totals-row table-primary">
-                        @for($i=0; $i<23; $i++)
-                            <th id="full_total_{{ $i }}" @if($i==0) class="text-end fw-bold" @elseif($i==3) class="text-start small" @elseif($i==5) class="text-end" @endif>
-                                @if($i==0) {{ __('Grand Totals:') }} @endif
-                            </th>
-                        @endfor
-                    </tr>
-                </tfoot>
+
             </table>
         </div>
     </div>
@@ -243,6 +240,27 @@
 
 @push('styles')
     <style>
+        .customer-cid-live { display:inline-flex; align-items:center; gap:.45rem; white-space:nowrap; }
+        .customer-live-dot { display:inline-block; width:.58rem; height:.58rem; flex:0 0 .58rem; border-radius:50%; }
+        .customer-live-dot--active { background:#16a34a; box-shadow:0 0 0 0 rgba(22,163,74,.55); animation:customerLivePulse 1.6s infinite; }
+        .customer-live-dot--inactive { background:#f43f5e; box-shadow:0 0 0 0 rgba(244,63,94,.35); }
+        @keyframes customerLivePulse { 0% { box-shadow:0 0 0 0 rgba(22,163,74,.5); } 70% { box-shadow:0 0 0 .42rem rgba(22,163,74,0); } 100% { box-shadow:0 0 0 0 rgba(22,163,74,0); } }
+        @media (prefers-reduced-motion: reduce) { .customer-live-dot--active { animation:none; } }
+        .customer-page-header { color: #172033; }
+        .customer-eyebrow { color: #4f46e5; font-size: .72rem; font-weight: 800; letter-spacing: .12em; margin-bottom: .35rem; }
+        .customer-page-title { font-size: clamp(1.45rem, 2.3vw, 2rem); font-weight: 800; letter-spacing: -.035em; margin: 0; color: #172033; }
+        .customer-page-subtitle { color: #738096; font-size: .92rem; margin-top: .35rem; }
+        .customer-header-actions .btn { border-radius: 10px; font-weight: 650; padding: .62rem .9rem; }
+        .customer-stat-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .8rem; }
+        .customer-stat-card { min-width: 0; display: flex; align-items: center; gap: .8rem; background: #fff; border: 1px solid #e8edf5; border-radius: 14px; padding: .9rem 1rem; box-shadow: 0 5px 18px rgba(24, 39, 75, .035); }
+        .customer-stat-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 42px; width: 42px; height: 42px; border-radius: 12px; font-size: 1.15rem; }
+        .stat-blue { background: #e9efff; color: #3559d8; } .stat-green { background: #e3f8ee; color: #138451; } .stat-amber { background: #fff3d8; color: #a96500; } .stat-red { background: #ffe8e8; color: #c03939; } .stat-violet { background: #f1eaff; color: #7542bd; }
+        .customer-stat-label { display: block; color: #778399; font-size: .76rem; font-weight: 650; white-space: nowrap; }
+        .customer-stat-card strong { display: block; color: #172033; font-size: 1.35rem; line-height: 1.3; font-weight: 800; }
+        .customer-row-actions .dropdown-toggle { border-radius: 9px; font-size: .78rem; font-weight: 700; white-space: nowrap; }
+        .customer-row-actions .dropdown-menu { min-width: 235px; max-height: 70vh; overflow-y: auto; padding: .45rem; border: 1px solid #e7ebf3; border-radius: 12px; z-index: 1085; }
+        .customer-row-actions .dropdown-item { border-radius: 7px; padding: .48rem .65rem; font-size: .82rem; }
+        .customer-row-actions .dropdown-item:hover { background: #f2f5ff; }
         .customer-filter-card,
         .customer-table-card {
             border-radius: 14px !important;
@@ -265,6 +283,58 @@
         .customer-filter-card .filter-group {
             scrollbar-width: thin;
             -webkit-overflow-scrolling: touch;
+        }
+        /* Keep filters and action buttons on one row on desktop.
+           Let the filter chips scroll instead of pushing actions onto a second line. */
+        .customer-filter-toolbar {
+            display: flex;
+            flex-wrap: nowrap !important;
+            align-items: center;
+            min-width: 0;
+        }
+        .customer-filter-toolbar {
+            width: auto;
+            gap: 0 !important;
+        }
+        .customer-filter-toolbar > .filter-group {
+            flex: 0 1 auto !important;
+            width: auto;
+            min-width: 0;
+            overflow-x: auto !important;
+            overflow-y: hidden;
+            flex-wrap: nowrap !important;
+            gap: .25rem !important;
+            white-space: nowrap;
+        }
+        .customer-filter-toolbar > .filter-group > label {
+            flex: 0 0 auto;
+            padding-left: .45rem !important;
+            padding-right: .45rem !important;
+            font-size: .72rem !important;
+            min-height: 29px;
+        }
+        .customer-filter-toolbar > .filter-group .badge {
+            font-size: .65rem;
+            padding: .2em .35em;
+        }
+        .customer-filter-toolbar > .customer-filter-actions {
+            flex: 0 0 auto !important;
+            width: auto !important;
+            margin-left: auto !important;
+            white-space: nowrap;
+            gap: .25rem !important;
+            padding-left: .4rem !important;
+        }
+        .customer-filter-actions .btn {
+            padding-left: .5rem !important;
+            padding-right: .5rem !important;
+            font-size: .74rem !important;
+            height: 1.85rem !important;
+            white-space: nowrap;
+        }
+        .customer-filter-actions form {
+            flex: 0 0 auto;
+            margin: 0;
         }
         .customer-table-card .table-responsive {
             border-radius: 14px;
@@ -292,7 +362,40 @@
             box-shadow: 0 6px 16px rgba(0,0,0,0.06);
             background-color: #f8f9ff !important;
         }
+        @media (max-width: 1199.98px) {
+            .customer-stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
         @media (max-width: 767.98px) {
+            .customer-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; }
+            .customer-stat-card { padding: .7rem; gap: .55rem; border-radius: 11px; }
+            .customer-stat-icon { width: 35px; height: 35px; flex-basis: 35px; border-radius: 10px; font-size: 1rem; }
+            .customer-stat-label { font-size: .68rem; white-space: normal; }
+            .customer-stat-card strong { font-size: 1.12rem; }
+            .customer-page-subtitle { font-size: .82rem; }
+            .customer-header-actions { width: 100%; }
+            .customer-header-actions .btn { flex: 1 1 auto; }
+            .customer-filter-toolbar {
+                flex-wrap: nowrap !important;
+                overflow-x: auto;
+                overflow-y: hidden;
+                padding-bottom: .25rem;
+                width: 100%;
+            }
+            .customer-filter-toolbar > .filter-group {
+                flex: 0 0 auto !important;
+                width: max-content !important;
+                min-width: max-content !important;
+                flex-wrap: nowrap !important;
+            }
+            .customer-filter-toolbar > .customer-filter-actions {
+                flex: 0 0 auto !important;
+                flex-wrap: nowrap !important;
+                width: max-content !important;
+                margin-left: 0 !important;
+                border-left: 1px solid #dee2e6 !important;
+                border-top: 0 !important;
+                padding-top: 0 !important;
+            }
             .customer-filter-card,
             .customer-table-card {
                 margin-left: 0 !important;
@@ -457,7 +560,7 @@
                         extend: 'excel',
                         text: '<i class="bi bi-file-earmark-excel"></i> {{ __("Excel") }}',
                         className: 'btn-outline-success',
-                        exportOptions: { columns: [0, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], footer: true }
+                        exportOptions: { columns: ':visible', footer: true }
                     },
                     {
                         extend: 'pdfHtml5',
@@ -465,13 +568,13 @@
                         className: 'btn-outline-danger',
                         orientation: 'landscape',
                         pageSize: 'LEGAL',
-                        exportOptions: { columns: [0, 8, 9, 10, 11, 12, 3, 20, 21, 22], footer: true }
+                        exportOptions: { columns: ':visible', footer: true }
                     },
                     {
                         extend: 'print',
                         text: '<i class="bi bi-printer"></i> {{ __("Print") }}',
                         className: 'btn-outline-dark',
-                        exportOptions: { columns: [0, 8, 9, 10, 11, 12, 3, 20, 21, 22], footer: true },
+                        exportOptions: { columns: ':visible', footer: true },
                         customize: function (win) {
                             $(win.document.body).find('h1').css('text-align', 'center').text('{{ __("Customer Billing Report") }}');
                             // We can manually append footer totals here if needed since footer: false is used
@@ -480,7 +583,15 @@
                     'colvis'
                 ],
                 ajax: {
-                    url: "{{ route('customers.data') }}", 
+                    url: "{{ route('customers.data') }}",
+                    dataSrc: function(json) {
+                        if (json && Array.isArray(json.data)) return json.data;
+                        console.error('Customer List data response is invalid', json);
+                        return [];
+                    },
+                    error: function(xhr) {
+                        console.error('Customer List AJAX failed', xhr.status, xhr.responseText);
+                    },
                     data: function(d) {
                         var checkedRadio = $('input[name="collection"]:checked');
                         var checkedId = checkedRadio.attr('id');
@@ -509,121 +620,27 @@
                         if (dashboardStatus && ['all','active','pending','free','disable','inactive','recent'].includes(dashboardStatus)) {
                             d.filter = dashboardStatus === 'active' ? 'all_active' : dashboardStatus;
                         }
+                        if (new URLSearchParams(window.location.search).get('map_missing') === '1') {
+                            d.filter = 'missing_location';
+                        }
                         d.router_name = $('#router_filter').val();
                     }
                 },
                 columns: [
-                    { data: 'DT_RowIndex', name: 'DT_RowIndex', title: '{{ __('SL') }}', searchable: false, orderable: false, className: 'text-center' },
-                    { data: 'customer_identity', name: 'customer_name', title: '{{ __('Customer Identity') }}', className: 'text-start' },
-                    { data: 'customers_address', name: 'customers_address', title: '{{ __('Address') }}', className: 'text-start' },
-                    { data: 'billing_breakdown', name: 'billing.monthly_rent', title: '{{ __('Billing Breakdown') }}', className: 'text-start' },
-                    { data: 'connection_details', name: 'ppp_user.username', title: '{{ __('Connection Info') }}', className: 'text-start' },
-                    { data: 'billing_summary', name: 'billing.total_amount', title: '{{ __('Billing Summary') }}', className: 'text-end' },
-                    { data: 'disable_details', name: 'disable_details', title: '{{ __('Auto Disable') }}', className: 'text-center' },
-                    { data: 'action', name: 'action', title: '{{ __('Action') }}', orderable: false, searchable: false, className: 'text-center' },
-                    
-                    // Invisible columns for raw data & totals (8-22)
-                    { data: 'customer_unique_id', name: 'customer_unique_id', title: '{{ __('ID') }}', visible: false, searchable: true },
-                    { data: 'customer_name', name: 'customer_name', title: '{{ __('Name') }}', visible: false, searchable: true },
-                    { data: 'customers_address', name: 'customers_address', title: '{{ __('Address') }}', visible: false, searchable: false },
-                    { data: 'mobile', name: 'mobile', title: '{{ __('Mobile') }}', visible: false, searchable: true },
-                    { data: 'ppp_user.username', name: 'ppp_user.username', title: '{{ __('IP') }}', visible: false, searchable: true },
-                    { data: 'ppp_user.router_name', name: 'ppp_user.router_name', title: '{{ __('Router') }}', visible: false, searchable: true },
-                    { data: 'billing.monthly_rent', name: 'billing.monthly_rent', title: '{{ __('Rent') }}', visible: false, searchable: false },
-                    { data: 'billing.previous_due', name: 'billing.previous_due', title: '{{ __('P.Due') }}', visible: false, searchable: false },
-                    { data: 'billing.additional_charge', name: 'billing.additional_charge', title: '{{ __('Add.') }}', visible: false, searchable: false },
-                    { data: 'billing.vat', name: 'billing.vat', title: '{{ __('Vat') }}', visible: false, searchable: false },
-                    { data: 'billing.discount', name: 'billing.discount', title: '{{ __('Disc') }}', visible: false, searchable: false },
-                    { data: 'billing.advance', name: 'billing.advance', title: '{{ __('Adv') }}', visible: false, searchable: false },
-                    { data: 'billing.total_amount', name: 'billing.total_amount', title: '{{ __('Bill') }}', visible: false, searchable: false },
-                    { data: 'billing.paid_amount', name: 'billing.paid_amount', title: '{{ __('Paid') }}', visible: false, searchable: false },
-                    { data: 'billing.due_amount', name: 'billing.due_amount', title: '{{ __('Due') }}', visible: false, searchable: false }
-                ],
-                footerCallback: function (row, data, start, end, display) {
-                    var api = this.api();
-                    var intVal = function (i) {
-                        if (typeof i === 'string') return i.replace(/[\$,]/g, '') * 1;
-                        if (typeof i === 'number') return i;
-                        return 0;
-                    };
-
-                    var fields = {
-                        rent: 14, prev_due: 15, add_charge: 16, vat: 17, disc: 18, adv: 19, 
-                        bill: 20, paid: 21, due: 22
-                    };
-
-                    var pageTotals = {}, grandTotals = {};
-
-                    Object.keys(fields).forEach(function(key) {
-                        var colIdx = fields[key];
-                        var col = api.column(colIdx);
-                        if (!col || !col.data) {
-                            pageTotals[key] = 0;
-                            grandTotals[key] = 0;
-                            return;
-                        }
-                        // Page Total
-                        pageTotals[key] = api.column(colIdx, { page: 'current' }).data().reduce(function(a, b) { return intVal(a) + intVal(b); }, 0);
-                        // Grand Total
-                        grandTotals[key] = api.column(colIdx).data().reduce(function(a, b) { return intVal(a) + intVal(b); }, 0);
-                    });
-
-                    // Update UI safely (Matching Table Column Design)
-                    var breakdownStyle = 'style="font-size: 0.7rem; line-height: 1.4;"';
-                    
-                    if ($('#page_total_3').length) {
-                        $('#page_total_3').html(
-                            '<div class="text-muted" ' + breakdownStyle + '>' +
-                            '<div><i class="bi bi-calendar3 me-1"></i>{{ __("Rent:") }} <span class="text-dark fw-bold">' + pageTotals.rent.toFixed(2) + '</span></div>' +
-                            '<div><i class="bi bi-exclamation-triangle me-1"></i>{{ __("P.Due:") }} <span class="text-dark fw-bold">' + pageTotals.prev_due.toFixed(2) + '</span></div>' +
-                            '<div><i class="bi bi-plus-circle me-1"></i>{{ __("Add:") }} <span class="text-dark fw-bold">' + pageTotals.add_charge.toFixed(2) + '</span> | <i class="bi bi-percent me-1"></i>{{ __("Vat:") }} <span class="text-dark fw-bold">' + pageTotals.vat.toFixed(0) + '</span></div>' +
-                            '<div><i class="bi bi-tag me-1"></i>{{ __("Disc:") }} <span class="text-danger fw-bold">' + pageTotals.disc.toFixed(2) + '</span> | <i class="bi bi-wallet-fill me-1"></i>{{ __("Adv:") }} <span class="text-success fw-bold">' + pageTotals.adv.toFixed(2) + '</span></div>' +
-                            '</div>'
-                        );
-                    }
- 
-                    if ($('#page_total_5').length) {
-                        $('#page_total_5').html(
-                            '<div class="billing-card small shadow-none border-0 text-start bg-transparent p-0">' +
-                            '<div class="d-flex justify-content-between text-muted"><span>{{ __("Bill:") }}</span> <span class="fw-bold text-primary">' + pageTotals.bill.toFixed(2) + '</span></div>' +
-                            '<div class="d-flex justify-content-between text-muted"><span>{{ __("Paid:") }}</span> <span class="fw-bold text-success">' + pageTotals.paid.toFixed(2) + '</span></div>' +
-                            '<hr class="my-1">' +
-                            '<div class="d-flex justify-content-between"><span>{{ __("Due:") }}</span> <span class="fw-bold text-danger">' + pageTotals.due.toFixed(2) + '</span></div>' +
-                            '</div>'
-                        );
-                    }
- 
-                    if ($('#full_total_3').length) {
-                        $('#full_total_3').html(
-                            '<div class="text-muted" ' + breakdownStyle + '>' +
-                            '<div><i class="bi bi-calendar3 me-1 text-primary"></i>{{ __("Rent:") }} <span class="text-primary fw-bold">' + grandTotals.rent.toFixed(2) + '</span></div>' +
-                            '<div><i class="bi bi-exclamation-triangle me-1 text-primary"></i>{{ __("P.Due:") }} <span class="text-primary fw-bold">' + grandTotals.prev_due.toFixed(2) + '</span></div>' +
-                            '<div><i class="bi bi-plus-circle me-1 text-primary"></i>{{ __("Add:") }} <span class="text-primary fw-bold">' + grandTotals.add_charge.toFixed(2) + '</span> | <i class="bi bi-percent me-1 text-primary"></i>{{ __("Vat:") }} <span class="text-primary fw-bold">' + grandTotals.vat.toFixed(0) + '</span></div>' +
-                            '<div><i class="bi bi-tag me-1 text-primary"></i>{{ __("Disc:") }} <span class="text-primary fw-bold">' + grandTotals.disc.toFixed(2) + '</span> | <i class="bi bi-wallet-fill me-1 text-primary"></i>{{ __("Adv:") }} <span class="text-primary fw-bold">' + grandTotals.adv.toFixed(2) + '</span></div>' +
-                            '</div>'
-                        );
-                    }
- 
-                    if ($('#full_total_5').length) {
-                        $('#full_total_5').html(
-                            '<div class="billing-card small shadow-none border-0 text-start bg-transparent p-0">' +
-                            '<div class="d-flex justify-content-between text-primary"><span>{{ __("Bill:") }}</span> <span class="fw-bold">' + grandTotals.bill.toFixed(2) + '</span></div>' +
-                            '<div class="d-flex justify-content-between text-primary"><span>{{ __("Paid:") }}</span> <span class="fw-bold">' + grandTotals.paid.toFixed(2) + '</span></div>' +
-                            '<hr class="my-1 border-primary opacity-50">' +
-                            '<div class="d-flex justify-content-between text-primary"><span>{{ __("Due:") }}</span> <span class="fw-bold">' + grandTotals.due.toFixed(2) + '</span></div>' +
-                            '</div>'
-                        );
-                    }
-
-                    // Populate raw cells for Export/Print clarity
-                    $('#page_total_20').text(pageTotals.bill.toFixed(2));
-                    $('#page_total_21').text(pageTotals.paid.toFixed(2));
-                    $('#page_total_22').text(pageTotals.due.toFixed(2));
-
-                    $('#full_total_20').text(grandTotals.bill.toFixed(2));
-                    $('#full_total_21').text(grandTotals.paid.toFixed(2));
-                    $('#full_total_22').text(grandTotals.due.toFixed(2));
-                }
+                    { data: 'DT_RowIndex', name: 'DT_RowIndex', title: '<input type="checkbox" id="select-all-customers" class="form-check-input" title="{{ __('Select All') }}" aria-label="{{ __('Select All') }}">', searchable: false, orderable: false, className: 'text-center', render: function(data, type, row) { return '<input type="checkbox" class="customer-select form-check-input" value="'+(row.customer_unique_id || '')+'">'; } },
+                    { data: 'cid', name: 'customer_unique_id', title: '{{ __('CID') }}', className: 'text-start' },
+                    { data: 'customer_name_display', name: 'customer_name', title: '{{ __('Customer') }}', className: 'text-start' },
+                    { data: 'connection', name: 'ppp_user.username', title: '{{ __('Connection') }}', className: 'text-start' },
+                    { data: 'mobile_display', name: 'mobile', title: '{{ __('Mobile') }}', className: 'text-start' },
+                    { data: 'package_display', name: 'package.package', title: '{{ __('Package') }}', className: 'text-start' },
+                    { data: 'billing_date_display', name: 'billing.auto_disable_date', title: '{{ __('Billing Date') }}', className: 'text-start' },
+                    { data: 'balance_display', name: 'billing.due_amount', title: '{{ __('Balance') }}', className: 'text-end' },
+                    { data: 'expiry_display', name: 'billing.auto_disable_date', title: '{{ __('Expiry') }}', className: 'text-start' },
+                    { data: 'address_display', name: 'customers_address', title: '{{ __('Address') }}', className: 'text-start' },
+                    { data: 'pop_area', name: 'official.distribution_location', title: '{{ __('POP / Area') }}', className: 'text-start' },
+                    { data: 'monthly_bill_display', name: 'billing.monthly_rent', title: '{{ __('Monthly Bill') }}', className: 'text-end' },
+                    { data: 'action', name: 'action', title: '{{ __('Actions') }}', orderable: false, searchable: false, className: 'text-center' }
+                ]
             });
 
             function updateCustomerCount() {
@@ -637,7 +654,21 @@
                 }
             }
 
-            table.on('draw', function () { updateCustomerCount(); });
+            table.on('draw', function () {
+                updateCustomerCount();
+                $('#select-all-customers').prop('checked', false);
+            });
+
+            // Select/unselect all customers visible on the current page.
+            $(document).off('change.customerSelectAll', '#select-all-customers').on('change.customerSelectAll', '#select-all-customers', function () {
+                $('.customer-select').prop('checked', this.checked);
+            });
+
+            $(document).off('change.customerSelect', '.customer-select').on('change.customerSelect', '.customer-select', function () {
+                const total = $('.customer-select').length;
+                const selected = $('.customer-select:checked').length;
+                $('#select-all-customers').prop('checked', total > 0 && total === selected);
+            });
             
             // Logic to reset table search when a filter is clicked
             function resetTableState() {

@@ -3,6 +3,8 @@
 namespace App\Livewire\Reseller;
 
 use App\Models\CustomersInfo;
+use App\Models\PaymentSummary;
+use App\Models\PPPSecrets;
 use App\Models\RouterList;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -23,9 +25,10 @@ class ResellerCustomerList extends Component
             abort(403);
         }
 
-        $this->routers = RouterList::all();
+        $this->routers = RouterList::query()->select('id', 'router_name')->where('action', 'connected')->orderBy('router_name')->get();
+        $panelRoutePrefix = $reseller->isMacPanel() ? 'mac-reseller' : 'reseller';
 
-        return view('livewire.reseller.customer-list')->layout('layouts.app');
+        return view('livewire.reseller.customer-list', compact('panelRoutePrefix'))->layout('layouts.app');
     }
 
     public function getData(Request $request)
@@ -90,7 +93,7 @@ class ResellerCustomerList extends Component
                 $bgColor = $colors[abs(crc32($row->customer_unique_id)) % count($colors)];
 
                 if (! empty($row->photo_url)) {
-                    $avatar = '<img src="'.asset('storage/'.$row->photo_url).'" '
+                    $avatar = '<img src="'.e(asset('storage/'.$row->photo_url)).'" '
                         .'alt="'.e($row->customer_name).'" '
                         .'class="avatar avatar-2xl rounded-circle">';
                 } else {
@@ -101,18 +104,18 @@ class ResellerCustomerList extends Component
                 return '<div class="d-flex align-items-center gap-2">'.
                     $avatar.
                     '<div>'.
-                    '<div class="fw-bold text-dark">'.$row->customer_name.
-                    (! empty($row->contact_person && $row->contact_person != '-') ? '<small class="text-muted"> ('.$row->contact_person.')</small>' : '').'</div>'.
+                    '<div class="fw-bold text-dark">'.e($row->customer_name).
+                    (! empty($row->contact_person && $row->contact_person != '-') ? '<small class="text-muted"> ('.e($row->contact_person).')</small>' : '').'</div>'.
 
                     '<div class="small">
-                        <span class="badge bg-secondary bg-opacity-10 text-secondary pe-2">'.$row->customer_unique_id.'</span> '.
+                        <span class="badge bg-secondary bg-opacity-10 text-secondary pe-2">'.e($row->customer_unique_id).'</span> '.
 
                         (! empty($row->mobile)
-                            ? '<span class="text-muted"><i class="bi bi-telephone text-success"></i> '.$row->mobile.'</span> '
+                            ? '<span class="text-muted"><i class="bi bi-telephone text-success"></i> '.e($row->mobile).'</span> '
                             : '').
 
                         (! empty($row->contact_email)
-                            ? '<span class="text-muted"><i class="bi bi-envelope text-success"></i> '.$row->contact_email.'</span>'
+                            ? '<span class="text-muted"><i class="bi bi-envelope text-success"></i> '.e($row->contact_email).'</span>'
                             : '').
 
                     '</div>'.
@@ -122,7 +125,7 @@ class ResellerCustomerList extends Component
                 $formattedAddresses = [];
                 foreach ($row->customerAddress as $address) {
                     $parts = array_filter([$address->input_type_text, $address->input_type_dropdown, $address->input_type_textarea]);
-                    $formattedAddresses[] = implode(', ', $parts);
+                    $formattedAddresses[] = implode(', ', array_map('e', $parts));
                 }
 
                 return implode(', ', $formattedAddresses);
@@ -143,9 +146,9 @@ class ResellerCustomerList extends Component
                        '</div>';
             })
             ->addColumn('connection_details', function ($row) {
-                return '<div class="mb-1 fw-bold text-info"><i class="bi bi-person-fill"></i> '.($row->pppUser->username ?? 'N/A').'</div>'.
+                return '<div class="mb-1 fw-bold text-info"><i class="bi bi-person-fill"></i> '.e($row->pppUser->username ?? 'N/A').'</div>'.
                        '<span class="badge bg-info bg-opacity-10 text-white border border-info border-opacity-25">'.
-                       '<i class="bi bi-router-fill me-1"></i>'.($row->pppUser->router_name ?? 'N/A').'</span>';
+                       '<i class="bi bi-router-fill me-1"></i>'.e($row->pppUser->router_name ?? 'N/A').'</span>';
             })
             ->addColumn('billing_summary', function ($row) {
                 $bill = number_format($row->billing?->total_amount ?? 0, 2);
@@ -169,61 +172,278 @@ class ResellerCustomerList extends Component
                        '<div class="text-muted" style="font-size: 0.7rem">Ext: '.($row->billing?->auto_disable_month ?? 0).' Mon</div>';
             })
             ->addColumn('action', function ($row) {
-                $delete_btn = '<button onclick="confirmDeleteCustomer(\''.encrypt($row->customer_unique_id).'\')" class="btn btn-danger"><i class="bi bi-trash"></i></button>';
-                $customers_edit_btn = '<button onclick="Livewire.dispatch(\'open-edit-customer\', { id: \''.encrypt($row->customer_unique_id).'\' })" class="edit btn btn-primary"><i class="bi bi-pencil-square"></i></button>';
+                $encryptedId = encrypt($row->customer_unique_id);
+                $delete_btn = in_array($row->status, ['active', 'free'], true)
+                    ? '<button class="btn btn-secondary" disabled title="'.($row->status === 'free' ? 'Administrator-managed client' : 'Disable before removing').'"><i class="bi bi-trash"></i></button>'
+                    : '<button onclick="confirmDeleteCustomer(\''.$encryptedId.'\')" class="btn btn-danger" title="Remove client"><i class="bi bi-trash"></i></button>';
+                $customers_edit_btn = '<button onclick="Livewire.dispatch(\'open-edit-customer\', { id: \''.$encryptedId.'\' })" class="edit btn btn-primary" title="Edit client"><i class="bi bi-pencil-square"></i></button>';
+                if (in_array($row->status, ['disable', 'pending'], true)) {
+                    $statusBtn = '<button onclick="confirmActivateCustomer(\''.$encryptedId.'\')" class="btn btn-success" title="Activate client"><i class="bi bi-person-check-fill"></i></button>';
+                } elseif ($row->status === 'free') {
+                    $statusBtn = '<button class="btn btn-secondary" disabled title="Free client status is controlled by the administrator"><i class="bi bi-shield-lock"></i></button>';
+                } else {
+                    $statusBtn = '<button onclick="confirmDisableCustomer(\''.$encryptedId.'\')" class="btn btn-warning" title="Disable client"><i class="bi bi-person-fill-slash"></i></button>';
+                }
 
-                return '<div class="action-btns d-flex justify-content-center">'.$customers_edit_btn.$delete_btn.'</div>';
+                return '<div class="action-btns d-flex justify-content-center">'.$customers_edit_btn.$statusBtn.$delete_btn.'</div>';
             })
             ->rawColumns(['customer_identity', 'customers_address', 'billing_breakdown', 'connection_details', 'billing_summary', 'action', 'disable_details'])
             ->make(true);
     }
 
-    #[On('delete-customer')]
-    public function deleteCustomer($id): void
+    #[On('activate-reseller-customer')]
+    public function activateCustomer($id): void
     {
-        $id = is_array($id) ? $id['id'] ?? $id : $id;
-
-        $reseller = auth()->user()->reseller;
-        if (! $reseller) {
-            flash()->addError('Unauthorized action.');
-            $this->dispatch('customer-action-done');
-
-            return;
-        }
+        $id = is_array($id) ? ($id['id'] ?? $id) : $id;
+        $reseller = auth()->user()?->reseller;
+        abort_unless(auth()->user()?->hasRole('Reseller') && $reseller && $reseller->isActive(), 403);
 
         try {
-            $decryptedId = decrypt($id);
-            $customerDelete = CustomersInfo::where('reseller_id', $reseller->id)
-                ->where('customer_unique_id', $decryptedId)
-                ->first();
+            $uniqueId = decrypt($id);
+            $customer = CustomersInfo::where('reseller_id', $reseller->id)
+                ->where('customer_unique_id', $uniqueId)
+                ->with(['pppUser', 'billing'])
+                ->firstOrFail();
 
-            if (! $customerDelete) {
-                flash()->addError('Customer not found.');
+            if ($customer->status === 'active') {
+                flash()->addInfo('Client is already active.');
                 $this->dispatch('customer-action-done');
-
+                return;
+            }
+            if (! in_array($customer->status, ['pending', 'disable'], true)) {
+                flash()->addError('Only pending or disabled clients can be activated.');
+                $this->dispatch('customer-action-done');
+                return;
+            }
+            if (! $customer->billing) {
+                flash()->addError('Cannot activate this client: billing information is missing.');
+                $this->dispatch('customer-action-done');
                 return;
             }
 
-            \DB::beginTransaction();
-            $pppUser = $customerDelete->pppUser;
-            if ($pppUser) {
-                if (! empty($pppUser->router_name)) {
-                    app(\App\Http\Controllers\MikrotikController::class)->removePPPSecret(
-                        $decryptedId,
-                        $pppUser->router_name,
-                        $pppUser->username
-                    );
-                }
-                $pppUser->delete();
-            }
-            $customerDelete->delete();
-            \DB::commit();
+            $bill = $customer->billing;
+            PaymentSummary::firstOrCreate(
+                [
+                    'customer_payment_unique_id' => $uniqueId,
+                    'summary_date' => Carbon::now()->startOfMonth()->toDateString(),
+                ],
+                [
+                    'monthly_rent' => $bill->monthly_rent,
+                    'additional_charge' => $bill->additional_charge,
+                    'vat' => $bill->vat,
+                    'previous_due' => $bill->previous_due,
+                    'advance' => $bill->advance,
+                    'discount' => $bill->discount,
+                ]
+            );
 
-            flash()->addSuccess('Customer deleted successfully.');
-        } catch (\Exception $e) {
-            \DB::rollBack();
+            \DB::transaction(function () use ($customer) {
+                $customer->status = 'active';
+                $customer->save();
+                if ($customer->pppUser) {
+                    PPPSecrets::where('id', $customer->ppp_user_id)->update(['status' => 'active']);
+                }
+            });
+
+            $ppp = $customer->pppUser;
+            $queued = false;
+            if ($ppp && filled($ppp->router_name) && filled($ppp->username)) {
+                $routerConnected = RouterList::where('router_name', $ppp->router_name)
+                    ->where('action', 'connected')->exists();
+                if ($routerConnected) {
+                    try {
+                        app(\App\Http\Controllers\MikrotikController::class)
+                            ->enablePPPSecret($uniqueId, $ppp->router_name, $ppp->username);
+                        if (filled($ppp->profile)) {
+                            app(\App\Http\Controllers\MikrotikController::class)
+                                ->updatePPPSecret($ppp->router_name, $ppp->username, 'profile', $ppp->profile);
+                        }
+                    } catch (\Throwable $e) {
+                        report($e);
+                        $routerConnected = false;
+                    }
+                }
+
+                $queue = app(\App\Services\MikrotikPendingActionQueue::class);
+                $queue->supersedePending($uniqueId, $ppp->router_name, $ppp->username, 'enable');
+                if (! $routerConnected) {
+                    $queue->queue($uniqueId, $ppp->router_name, $ppp->username, 'enable');
+                    $queued = true;
+                }
+            }
+
+            if ($queued) {
+                flash()->addWarning('Client activated locally; router activation queued until it is available.');
+            } else {
+                flash()->addSuccess('Client activated successfully.');
+            }
+        } catch (\Throwable $e) {
             report($e);
-            flash()->addError('Failed to delete customer. Please try again.');
+            flash()->addError('Unable to activate this client.');
+        }
+
+        $this->dispatch('customer-action-done');
+    }
+
+    #[On('disable-reseller-customer')]
+    public function disableCustomer($id): void
+    {
+        $id = is_array($id) ? ($id['id'] ?? $id) : $id;
+        $reseller = auth()->user()?->reseller;
+        abort_unless(auth()->user()?->hasRole('Reseller') && $reseller && $reseller->isActive(), 403);
+
+        try {
+            $uniqueId = decrypt($id);
+            $customer = CustomersInfo::where('reseller_id', $reseller->id)
+                ->where('customer_unique_id', $uniqueId)
+                ->with('pppUser')
+                ->firstOrFail();
+
+            if ($customer->status === 'disable') {
+                flash()->addInfo('Client is already disabled.');
+                $this->dispatch('customer-action-done');
+                return;
+            }
+            if ($customer->status === 'free') {
+                flash()->addError('Free-status clients can only be managed by an administrator.');
+                $this->dispatch('customer-action-done');
+                return;
+            }
+
+            $ppp = $customer->pppUser;
+            $pendingAction = null;
+            if ($ppp && filled($ppp->router_name) && filled($ppp->username)) {
+                $routerConnected = RouterList::where('router_name', $ppp->router_name)
+                    ->where('action', 'connected')->exists();
+                if ($routerConnected) {
+                    try {
+                        app(\App\Http\Controllers\MikrotikController::class)
+                            ->disablePPPSecret($uniqueId, $ppp->router_name, $ppp->username);
+                    } catch (\Throwable $e) {
+                        report($e);
+                        $routerConnected = false;
+                    }
+                }
+                if (! $routerConnected) {
+                    $pendingAction = [
+                        'customer_unique_id' => $uniqueId,
+                        'router_name' => $ppp->router_name,
+                        'username' => $ppp->username,
+                        'action' => 'disable',
+                        'status' => 'pending',
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ];
+                }
+            }
+
+            $pendingId = \DB::transaction(function () use ($customer, $ppp, $pendingAction, $uniqueId) {
+                $pendingId = null;
+                if ($ppp && filled($ppp->router_name) && filled($ppp->username)) {
+                    $queue = app(\App\Services\MikrotikPendingActionQueue::class);
+                    $queue->supersedePending($uniqueId, $ppp->router_name, $ppp->username, 'disable');
+                    if ($pendingAction) {
+                        $pendingId = $queue->queue($uniqueId, $ppp->router_name, $ppp->username, 'disable');
+                    }
+                    PPPSecrets::where('id', $customer->ppp_user_id)->update(['status' => 'disable']);
+                }
+                $customer->status = 'disable';
+                $customer->save();
+                return $pendingId;
+            });
+
+            if ($pendingId) {
+                \Log::warning('MAC/standard reseller disabled a client while router was unavailable; action queued', [
+                    'customer_id' => $uniqueId,
+                    'router_name' => $pendingAction['router_name'],
+                    'pending_action_id' => $pendingId,
+                ]);
+                flash()->addWarning('Client disabled locally; router action queued until it is available.');
+            } else {
+                flash()->addSuccess('Client disabled successfully.');
+            }
+        } catch (\Throwable $e) {
+            report($e);
+            flash()->addError('Unable to disable this client.');
+        }
+
+        $this->dispatch('customer-action-done');
+    }
+
+    #[On('delete-customer')]
+    public function deleteCustomer($id): void
+    {
+        $id = is_array($id) ? ($id['id'] ?? $id) : $id;
+        $reseller = auth()->user()?->reseller;
+        abort_unless(auth()->user()?->hasRole('Reseller') && $reseller && $reseller->isActive(), 403);
+
+        try {
+            $uniqueId = decrypt($id);
+            $customer = CustomersInfo::where('reseller_id', $reseller->id)
+                ->where('customer_unique_id', $uniqueId)
+                ->with('pppUser')
+                ->first();
+
+            if (! $customer) {
+                flash()->addError('Client not found in your account.');
+                $this->dispatch('customer-action-done');
+                return;
+            }
+            if (in_array($customer->status, ['active', 'free'], true)) {
+                flash()->addError($customer->status === 'free' ? 'Free-status clients can only be removed by an administrator.' : 'Disable the client before removing it.');
+                $this->dispatch('customer-action-done');
+                return;
+            }
+
+            $ppp = $customer->pppUser;
+            $pendingAction = null;
+            if ($ppp && filled($ppp->router_name) && filled($ppp->username)) {
+                $routerConnected = RouterList::where('router_name', $ppp->router_name)
+                    ->where('action', 'connected')->exists();
+                if ($routerConnected) {
+                    try {
+                        app(\App\Http\Controllers\MikrotikController::class)
+                            ->removePPPSecret($uniqueId, $ppp->router_name, $ppp->username);
+                    } catch (\Throwable $e) {
+                        report($e);
+                        $routerConnected = false;
+                    }
+                }
+                if (! $routerConnected) {
+                    $pendingAction = [
+                        'customer_unique_id' => $uniqueId,
+                        'router_name' => $ppp->router_name,
+                        'username' => $ppp->username,
+                        'action' => 'remove',
+                        'status' => 'pending',
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ];
+                }
+            }
+
+            $pendingId = \DB::transaction(function () use ($customer, $ppp, $pendingAction, $uniqueId) {
+                $pendingId = null;
+                if ($ppp && filled($ppp->router_name) && filled($ppp->username)) {
+                    $queue = app(\App\Services\MikrotikPendingActionQueue::class);
+                    $queue->supersedePending($uniqueId, $ppp->router_name, $ppp->username, 'remove');
+                    if ($pendingAction) {
+                        $pendingId = $queue->queue($uniqueId, $ppp->router_name, $ppp->username, 'remove');
+                    }
+                    $ppp->delete();
+                }
+                $customer->delete();
+                return $pendingId;
+            });
+
+            if ($pendingId) {
+                flash()->addWarning('Client removed locally; router removal queued until it is available.');
+            } else {
+                flash()->addSuccess('Client removed successfully.');
+            }
+        } catch (\Throwable $e) {
+            report($e);
+            flash()->addError('Unable to remove this client.');
         }
 
         $this->dispatch('customer-action-done');
@@ -232,7 +452,12 @@ class ResellerCustomerList extends Component
     #[On('open-edit-customer')]
     public function openEditCustomerModal($id)
     {
-        $this->editingCustomerId = is_array($id) ? $id['id'] ?? $id : $id;
+        $id = is_array($id) ? ($id['id'] ?? $id) : $id;
+        $reseller = auth()->user()?->reseller;
+        abort_unless(auth()->user()?->hasRole('Reseller') && $reseller && $reseller->isActive(), 403);
+        $uniqueId = decrypt($id);
+        abort_unless(CustomersInfo::where('reseller_id', $reseller->id)->where('customer_unique_id', $uniqueId)->exists(), 403);
+        $this->editingCustomerId = $id;
     }
 
     public function closeEditCustomerModal()

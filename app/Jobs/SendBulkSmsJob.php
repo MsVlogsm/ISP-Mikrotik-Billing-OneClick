@@ -4,8 +4,9 @@ namespace App\Jobs;
 
 use App\Models\CustomersInfo;
 use App\Models\NotificationLogs;
+use App\Models\SmsDispatchLog;
 use App\Models\User;
-use Codepagol\SmsBridge\Facades\SmsBridge;
+use XLink\SmsBridge\Facades\SmsBridge;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -56,6 +57,7 @@ class SendBulkSmsJob implements ShouldQueue
                 foreach ($customers as $customer) {
                     if (empty($customer->mobile)) {
                         $errorIDs[] = $customer->customer_unique_id . ' (No mobile number)';
+                        $this->recordDispatch($customer, '', 'Bulk SMS', 'failed', 'Customer has no mobile number.');
                         continue;
                     }
 
@@ -69,13 +71,16 @@ class SendBulkSmsJob implements ShouldQueue
 
                         if ($response && $response->isSuccessful()) {
                             $successfulIDs[] = $customer->customer_unique_id . ' (' . ($customer->pppUser->username ?? 'No PPPoE') . ')';
+                            $this->recordDispatch($customer, $message, 'Bulk SMS', 'sent', $response->getMessage() ?: 'Gateway accepted the message.');
                         } else {
                             $errorMsg = $response ? $response->getMessage() : 'Unknown error';
                             $errorIDs[] = $customer->customer_unique_id . ' (' . ($customer->pppUser->username ?? 'No PPPoE') . ') - Error: ' . $errorMsg;
+                            $this->recordDispatch($customer, $message, 'Bulk SMS', 'failed', $errorMsg);
                         }
-                    } catch (\Exception $e) {
+                    } catch (\Throwable $e) {
                         Log::error("Bulk SMS gateway exception for: " . $customer->customer_unique_id . " - " . $e->getMessage());
                         $errorIDs[] = $customer->customer_unique_id . ' - Exception: SMS gateway failure';
+                        $this->recordDispatch($customer, $message ?? '', 'Bulk SMS', 'failed', 'SMS gateway exception.');
                     }
                 }
             });
@@ -98,6 +103,32 @@ class SendBulkSmsJob implements ShouldQueue
                 'type' => 'Bulk SMS',
             ]);
         }
+    }
+
+    private function recordDispatch(CustomersInfo $customer, string $message, string $smsType, string $status, string $gatewayResponse): void
+    {
+        SmsDispatchLog::create([
+            'customer_id' => $customer->id,
+            'user_id' => $this->adminUserId,
+            'recipient' => (string) ($customer->mobile ?? ''),
+            'customer_code' => (string) ($customer->customer_unique_id ?? ''),
+            'customer_name' => (string) ($customer->customer_name ?? ''),
+            'sms_type' => $smsType,
+            'sms_count' => $this->smsSegments($message),
+            'message' => $message !== '' ? $message : '[Not sent: no recipient mobile number]',
+            'status' => $status,
+            'gateway_response' => mb_substr($gatewayResponse, 0, 4000),
+            'sent_at' => $status === 'sent' ? now() : null,
+        ]);
+    }
+
+    private function smsSegments(string $message): int
+    {
+        $unicode = preg_match('/[^\x00-\x7F]/', $message) === 1;
+        $length = mb_strlen($message, 'UTF-8');
+        $singleLimit = $unicode ? 70 : 160;
+        $multiLimit = $unicode ? 67 : 153;
+        return $length <= $singleLimit ? 1 : max(1, (int) ceil($length / $multiLimit));
     }
 
     /**

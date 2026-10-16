@@ -27,7 +27,7 @@ class ManageReviews extends Component
 
     public function toggleShowOnSite(int $id)
     {
-        if (! hasAccess(['Super Admin'], ['all-customer'])) {
+        if (! hasAccess(['Super Admin'], ['manage-reviews'])) {
             abort(403, 'Unauthorized action.');
         }
 
@@ -41,7 +41,7 @@ class ManageReviews extends Component
 
     public function startEdit(int $id)
     {
-        if (! hasAccess(['Super Admin'], ['all-customer'])) {
+        if (! hasAccess(['Super Admin'], ['manage-reviews'])) {
             abort(403, 'Unauthorized action.');
         }
 
@@ -53,7 +53,7 @@ class ManageReviews extends Component
 
     public function updateReview()
     {
-        if (! hasAccess(['Super Admin'], ['all-customer'])) {
+        if (! hasAccess(['Super Admin'], ['manage-reviews'])) {
             abort(403, 'Unauthorized action.');
         }
 
@@ -81,7 +81,7 @@ class ManageReviews extends Component
 
     public function deleteReview(int $id)
     {
-        if (! hasAccess(['Super Admin'], ['all-customer'])) {
+        if (! hasAccess(['Super Admin'], ['manage-reviews'])) {
             abort(403, 'Unauthorized action.');
         }
 
@@ -91,7 +91,7 @@ class ManageReviews extends Component
 
     public function render()
     {
-        if (! hasAccess(['Super Admin'], ['all-customer'])) {
+        if (! hasAccess(['Super Admin'], ['manage-reviews'])) {
             abort(403, 'Unauthorized action.');
         }
 

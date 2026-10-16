@@ -28,6 +28,8 @@ class NewCustomer extends Component
 
     public $customer_name;
 
+    public $customer_unique_id;
+
     public $email;
 
     public $identification_no;
@@ -145,6 +147,9 @@ class NewCustomer extends Component
         $this->connected_by = auth()->id();
 
         $mikrotikClientId = request()->integer('mikrotik_client');
+        if ($mikrotikClientId && auth()->user()->hasRole('Reseller')) {
+            abort(403, 'MikroTik user import is only available to authorized billing administrators.');
+        }
         if ($mikrotikClientId) {
             $secret = PPPSecrets::findOrFail($mikrotikClientId);
             abort_unless($secret->service === null || strtolower((string) $secret->service) === 'pppoe', 422, 'Only PPPoE users can be imported from MikroTik.');
@@ -213,10 +218,11 @@ class NewCustomer extends Component
         // Start with the base rules
         $rules = [
             'customer_name' => 'required|min:3|max:255',
+            'customer_unique_id' => 'required|string|max:255|unique:customers_infos,customer_unique_id',
             'mobile' => ['nullable', 'string', new ValidPhoneDigits],
             'email' => 'nullable|email',
             'alternative_mobile' => ['nullable', 'string', new ValidPhoneDigits],
-            'identification_no' => 'nullable|string',
+            'identification_no' => 'nullable|string|max:255',
             'router_name' => 'nullable|required_with:service',
             'service' => 'nullable|required_with:router_name',
             'interface' => 'nullable|required_if:service,static',
@@ -227,6 +233,7 @@ class NewCustomer extends Component
             'profile' => 'nullable|required_if:service,pppoe|string|max:25',
             'username' => 'nullable|required_if:service,pppoe|string|max:25',
             'monthly_rent' => 'required|numeric',
+            'package_name' => 'nullable|string|max:255',
             'connected_by' => 'required',
             'billing_type' => 'required',
             'connection_type' => 'required',
@@ -252,12 +259,14 @@ class NewCustomer extends Component
 
     public function updated($propertyName)
     {
-        $this->validateOnly($propertyName);
+        $rules = $this->rules();
+        if (array_key_exists($propertyName, $rules)) {
+            $this->validateOnly($propertyName);
+        }
     }
 
-    public function packageName($value)
+    public function updatedPackageName(): void
     {
-        $this->package_name = $this->profile;
         $this->calculateTotal('package_name');
     }
 
@@ -271,10 +280,17 @@ class NewCustomer extends Component
                     ->where(function ($q) use ($reseller) {
                         $q->whereIn('id', $reseller->assignedPackages->pluck('id'))
                             ->orWhere('reseller_id', $reseller->id);
-                    })->first();
+                    })
+                    ->when(filled($this->router_name), function ($q) {
+                        $routerName = $this->router_name;
+                        $q->where(function ($routeQuery) use ($routerName) {
+                            $routeQuery->where('router_name', $routerName)->orWhereNull('router_name');
+                        });
+                    })
+                    ->first();
             } else {
                 $package = PackageList::where('package', $this->package_name)
-                    ->where('router_name', ! empty($this->router_name) ? $this->router_name : null)
+                    ->when(! empty($this->router_name), fn ($q) => $q->where('router_name', $this->router_name))
                     ->first();
             }
             $this->monthly_rent = $package?->price ?? '';
@@ -586,9 +602,15 @@ class NewCustomer extends Component
             }
 
             $pppUser = null;
-            if (auth()->user()->can('mikrotik-user-create')) {
+            if (auth()->user()->can('mikrotik-user-create') || auth()->user()->hasRole('Reseller')) {
                 // create ppp_user table record
-                $pppUserCheck = PPPSecrets::where('username', $this->username)->orwhere('username', $this->queue_name)->first();
+                $pppUserCheck = PPPSecrets::query()
+                    ->when(filled($this->router_name), fn ($q) => $q->where('router_name', $this->router_name))
+                    ->where(function ($q) {
+                        $q->where('username', $this->username)
+                            ->orWhere('username', $this->queue_name);
+                    })
+                    ->first();
 
                 // Check if this PPP user is already linked to a customer
                 if ($pppUserCheck && CustomersInfo::where('ppp_user_id', $pppUserCheck->id)->exists()) {
@@ -616,22 +638,17 @@ class NewCustomer extends Component
                 }
             }
 
-            // create customers_info table record
-            $prefix = siteUrlSettings('customer_id_prefix') ?: 'FCNET';
-            $lastCustomer = CustomersInfo::orderBy('id', 'desc')->value('customer_unique_id');
-            if ($lastCustomer) {
-                if (str_starts_with($lastCustomer, $prefix)) {
-                    $lastId = (int) substr($lastCustomer, strlen($prefix));
-                } else {
-                    if (preg_match('/(\d+)$/', $lastCustomer, $matches)) {
-                        $lastId = (int) $matches[1];
-                    } else {
-                        $lastId = 99;
-                    }
-                }
-                $newId = $prefix.($lastId + 1);
-            } else {
-                $newId = $prefix.'100';
+            // Customer Unique Id is manual only. Never auto-generate an ID.
+            $newId = trim((string) $this->customer_unique_id);
+            if ($newId === '') {
+                throw ValidationException::withMessages([
+                    'customer_unique_id' => 'Customer Unique Id is required.',
+                ]);
+            }
+            if (CustomersInfo::where('customer_unique_id', $newId)->exists()) {
+                throw ValidationException::withMessages([
+                    'customer_unique_id' => 'This Customer Unique Id is already in use.',
+                ]);
             }
             $customer = new CustomersInfo;
             if (auth()->user()->hasRole('Reseller')) {
@@ -643,8 +660,11 @@ class NewCustomer extends Component
             $customer->email = $this->email;
             $customer->identification_no = $this->identification_no;
             $customer->photo_url = $this->photo_url ? $path : null;
-            $customer->mobile = filled($this->mobile) ? '88'.$this->mobile : null;
-            $customer->alternative_mobile = filled($this->alternative_mobile) ? '88'.$this->alternative_mobile : null;
+            // Keep customer contact numbers in Bangladesh local format only.
+            // CustomersInfo normalizes legacy international formats on import,
+            // but Add Customer must not add a country-code prefix.
+            $customer->mobile = filled($this->mobile) ? trim((string) $this->mobile) : null;
+            $customer->alternative_mobile = filled($this->alternative_mobile) ? trim((string) $this->alternative_mobile) : null;
             $customer->profession = $this->profession;
             $customer->ppp_user_id = $pppUser?->id;
             $customer->connection_date = $this->connection_date;
@@ -658,7 +678,14 @@ class NewCustomer extends Component
                         ->where(function ($q) use ($reseller) {
                             $q->whereIn('id', $reseller->assignedPackages->pluck('id'))
                                 ->orWhere('reseller_id', $reseller->id);
-                        })->first();
+                        })
+                        ->when(filled($this->router_name), function ($q) {
+                            $routerName = $this->router_name;
+                            $q->where(function ($routeQuery) use ($routerName) {
+                                $routeQuery->where('router_name', $routerName)->orWhereNull('router_name');
+                            });
+                        })
+                        ->first();
                     $assignedPackageId = $pkg?->id;
                 } else {
                     $pkg = PackageList::where('package', $this->package_name)
@@ -685,13 +712,20 @@ class NewCustomer extends Component
                 $customerAddress->save();
             }
 
-            if ($this->latitude !== null || $this->longitude !== null) {
-                CustomersAddress::create([
-                    'customer_address_unique_id' => $customer->customer_unique_id,
-                    'label_name' => 'Network Location',
-                    'latitude' => $this->latitude,
-                    'longitude' => $this->longitude,
-                ]);
+            $latitude = is_numeric($this->latitude) ? (float) $this->latitude : null;
+            $longitude = is_numeric($this->longitude) ? (float) $this->longitude : null;
+
+            if ($latitude !== null || $longitude !== null) {
+                CustomersAddress::updateOrCreate(
+                    [
+                        'customer_address_unique_id' => $customer->customer_unique_id,
+                        'label_name' => 'Network Location',
+                    ],
+                    [
+                        'latitude' => $latitude,
+                        'longitude' => $longitude,
+                    ]
+                );
             }
 
             $customerBilling = new BillingInfo;
@@ -717,7 +751,7 @@ class NewCustomer extends Component
             $customerOfficial->connection_type = $this->connection_type;
             $customerOfficial->connectivity_type = $this->connectivity_type;
             $customerOfficial->client_type = $this->client_type;
-            $customerOfficial->distribution_location = $this->distribution_location;
+            $customerOfficial->distribution_location = $this->address['Distribution Location Point'] ?? null;
             $customerOfficial->description = $this->description;
             $customerOfficial->note = $this->note;
             $customerOfficial->security_deposit = $this->normalizeValue($this->security_deposit);
@@ -734,7 +768,8 @@ class NewCustomer extends Component
 
             // Redirect to customers list
             if (auth()->user()->hasRole('Reseller')) {
-                return redirect()->route('reseller.customers.index');
+                $routePrefix = auth()->user()->reseller?->isMacPanel() ? 'mac-reseller' : 'reseller';
+                return redirect()->route($routePrefix.'.customers.index');
             }
 
             return redirect('/customers');
@@ -771,6 +806,12 @@ class NewCustomer extends Component
                 $q->whereIn('id', $reseller->assignedPackages->pluck('id'))
                     ->orWhere('reseller_id', $reseller->id);
             })
+                ->when(filled($this->router_name), function ($q) {
+                    $routerName = $this->router_name;
+                    $q->where(function ($routeQuery) use ($routerName) {
+                        $routeQuery->where('router_name', $routerName)->orWhereNull('router_name');
+                    });
+                })
                 ->select('price', 'package')
                 ->get();
         } else {
@@ -779,8 +820,10 @@ class NewCustomer extends Component
                 ->get();
         }
 
-        // $users = User::permission('create-user')->get();
-        $this->users = User::all();
+        // Keep internal user lists out of reseller Livewire state.
+        $this->users = auth()->user()->hasRole('Reseller')
+            ? User::query()->select('id', 'name')->whereKey(auth()->id())->get()
+            : User::select('id', 'name')->get();
 
         return view('livewire.new-customer')->layout('layouts.app');
     }

@@ -69,6 +69,17 @@
 
                         <div class="row">
                             <div class="col-md-6 mb-3">
+                                <label class="form-label fw-semibold text-muted small">{{ __('Panel Type') }}</label>
+                                <select name="panel_type" class="form-select shadow-xs" required style="border-radius: 6px;">
+                                    <option value="standard" {{ old('panel_type', 'standard') === 'standard' ? 'selected' : '' }}>{{ __('Standard Reseller') }}</option>
+                                    <option value="mac" {{ old('panel_type') === 'mac' ? 'selected' : '' }}>{{ __('MAC Reseller — Independent Client Panel') }}</option>
+                                </select>
+                                <small class="text-muted">{{ __('MAC Resellers receive only their separate client-management panel; global billing/admin permissions are not assigned.') }}</small>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
                                 <label class="form-label fw-semibold text-muted small">{{ __('Commission Percentage (%)') }}</label>
                                 <input type="number" step="0.1" name="commission_percentage" class="form-control shadow-xs" value="{{ old('commission_percentage', '10.0') }}" required min="0" max="100" placeholder="e.g. 15" style="border-radius: 6px;">
                             </div>

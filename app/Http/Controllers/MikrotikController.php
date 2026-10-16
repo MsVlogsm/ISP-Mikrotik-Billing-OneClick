@@ -19,11 +19,11 @@ class MikrotikController extends Controller
     /**
      * Get or create a pooled API service instance
      */
-    protected function getPooledApiService(string $ip, int $port, string $username, string $password, int $timeout = 3): MikrotikApiService
+    protected function getPooledApiService(string $ip, int $port, string $username, string $password, int $timeout = 3, bool $ssl = false): MikrotikApiService
     {
-        $key = "{$ip}:{$port}:{$username}";
+        $key = "{$ip}:{$port}:{$username}:ssl=".(int) $ssl;
         if (! isset(self::$apiPool[$key])) {
-            self::$apiPool[$key] = new MikrotikApiService($ip, $port, $username, $password, $timeout);
+            self::$apiPool[$key] = new MikrotikApiService($ip, $port, $username, $password, $timeout, $ssl);
         }
 
         return self::$apiPool[$key];
@@ -93,7 +93,8 @@ class MikrotikController extends Controller
         ?string $apiCmd = null,
         ?string $sshCmd = null,
         array $apiParams = [],
-        bool $showErrorFlash = true
+        bool $showErrorFlash = true,
+        bool $apiSsl = false
     ): array {
         $apiError = null;
 
@@ -104,7 +105,7 @@ class MikrotikController extends Controller
                 }
 
                 // Short 3s timeout: if API port is unreachable we fail fast and try SSH immediately
-                $response = $this->getPooledApiService($ip, $apiPort, $username, $password, 3)
+                $response = $this->getPooledApiService($ip, $apiPort, $username, $password, 3, $apiSsl)
                     ->executeCommand($apiCmd, $apiParams);
 
                 if (is_string($response) && str_starts_with($response, 'Error:')) {
@@ -215,7 +216,8 @@ class MikrotikController extends Controller
                     $apiCmd,
                     $sshCmd,
                     $apiParams,
-                    $showErrorFlash
+                    $showErrorFlash,
+                    (bool) $router->api_ssl
                 );
 
                 // Only cache if the connection attempt was successful
@@ -248,7 +250,7 @@ class MikrotikController extends Controller
             // Priority 1: High-Speed API (3s timeout — fail fast so SSH fallback is immediate)
             if ($router->api_port) {
                 try {
-                    $service = $this->getPooledApiService($router->ip_address, $router->api_port, $router->username, $router->password, 3);
+                    $service = $this->getPooledApiService($router->ip_address, $router->api_port, $router->username, $router->password, 3, (bool) $router->api_ssl);
                     $isPrint = str_contains($apiCmd, 'print');
                     $res = $service->executeCommand(
                         $apiCmd,
@@ -357,7 +359,7 @@ class MikrotikController extends Controller
         // Priority 2: API fallback for write commands (3s timeout)
         if ($router->api_port) {
             try {
-                $api = $this->getPooledApiService($router->ip_address, $router->api_port, $router->username, $router->password, 3);
+                $api = $this->getPooledApiService($router->ip_address, $router->api_port, $router->username, $router->password, 3, (bool) $router->api_ssl);
                 $lcmd = ltrim($command, '/');
 
                 // Atomic [find ...] mapping: resolve name-based selector to internal .id for API
@@ -1109,8 +1111,103 @@ class MikrotikController extends Controller
 
     public function getActivePppSessions(string $routerName): array
     {
-        return $this->getItems($routerName, '/ppp/active');
+        // Active PPP sessions are real-time state, so bypass the generic read cache.
+        return $this->singleRead(
+            $routerName,
+            '/ppp/active/print',
+            'ppp active print without-paging terse',
+            [],
+            false,
+            true
+        );
     }
+
+    /**
+     * Read-only live PPP telemetry for every configured router.
+     * The result is cached for 30 seconds, but the last successful read time
+     * is retained per router so the dashboard can distinguish stale/unavailable
+     * telemetry from a real zero-session result.
+     */
+    public function getLivePppTelemetry(): array
+    {
+        return \Cache::remember('mikrotik:live_ppp_telemetry', now()->addSeconds(30), function () {
+            $routers = [];
+            $total = 0;
+            $successful = 0;
+
+            foreach (RouterList::query()->get() as $router) {
+                $name = (string) $router->router_name;
+                try {
+                    $result = $this->checkConnection(
+                        $router->ip_address,
+                        $router->ssh_port,
+                        $router->api_port,
+                        $router->username,
+                        $router->password,
+                        '/ppp/active/print',
+                        '/ppp active print without-paging terse',
+                        [],
+                        false,
+                        (bool) $router->api_ssl
+                    );
+
+                    if (($result['status'] ?? false) === true) {
+                        $count = count($result['data'] ?? []);
+                        $syncedAt = now()->toIso8601String();
+                        \Cache::forever("mikrotik:live_ppp_last_success:{$name}", $syncedAt);
+                        $routers[$name] = [
+                            'status' => 'ok',
+                            'count' => $count,
+                            'synced_at' => $syncedAt,
+                            'type' => $result['type'] ?? null,
+                        ];
+                        $total += $count;
+                        $successful++;
+                    } else {
+                        $routers[$name] = [
+                            'status' => 'unavailable',
+                            'count' => null,
+                            'synced_at' => \Cache::get("mikrotik:live_ppp_last_success:{$name}"),
+                            'type' => null,
+                        ];
+                    }
+                } catch (\Throwable $e) {
+                    \Log::debug("MikroTik live PPP read failed [{$name}]: ".$e->getMessage());
+                    $routers[$name] = [
+                        'status' => 'unavailable',
+                        'count' => null,
+                        'synced_at' => \Cache::get("mikrotik:live_ppp_last_success:{$name}"),
+                        'type' => null,
+                    ];
+                }
+            }
+
+            return [
+                'status' => $successful > 0 ? 'ok' : 'unavailable',
+                'total' => $successful > 0 ? $total : null,
+                'successful_routers' => $successful,
+                'router_count' => count($routers),
+                'routers' => $routers,
+                'checked_at' => now()->toIso8601String(),
+            ];
+        });
+    }
+
+    /**
+     * Backward-compatible count-only helper.
+     */
+    public function getLivePppSessionCounts(): array
+    {
+        $telemetry = $this->getLivePppTelemetry();
+        $counts = [];
+        foreach ($telemetry['routers'] ?? [] as $name => $router) {
+            if (($router['status'] ?? null) === 'ok') {
+                $counts[$name] = (int) $router['count'];
+            }
+        }
+        return $counts;
+    }
+
 
     // =========================================================================
     // HOTSPOT
@@ -1788,6 +1885,64 @@ class MikrotikController extends Controller
         return $empty;
     }
 
+    /**
+     * Read live traffic and session byte counters for a PPPoE customer interface.
+     * Counters come from the dynamic PPPoE interface and therefore represent the
+     * current session; rates come from RouterOS monitor-traffic.
+     */
+    public function getLiveCustomerTraffic(string $routerName, string $username): array
+    {
+        $empty = [
+            'interface' => null,
+            'rx-bits-per-second' => 0,
+            'tx-bits-per-second' => 0,
+            'rx-bytes' => 0,
+            'tx-bytes' => 0,
+            'rx-mb' => 0,
+            'tx-mb' => 0,
+        ];
+
+        if ($routerName === '' || $username === '') {
+            return $empty;
+        }
+
+        try {
+            $interfaces = $this->getInterfaces($routerName);
+            $needle = strtolower($username);
+            $interface = collect($interfaces)->first(function ($row) use ($needle) {
+                $name = strtolower((string) ($row['name'] ?? ''));
+                return $name === '<pppoe-'.$needle.'>' || $name === 'pppoe-'.$needle;
+            });
+
+            if (! $interface) {
+                return $empty;
+            }
+
+            $interfaceName = (string) ($interface['name'] ?? '');
+            $rate = $this->getLiveTraffic($routerName, $interfaceName);
+            $rxBytes = max(0, (int) ($interface['rx-byte'] ?? 0));
+            $txBytes = max(0, (int) ($interface['tx-byte'] ?? 0));
+
+            return [
+                'interface' => $interfaceName,
+                'rx-bits-per-second' => (int) ($rate['rx-bits-per-second'] ?? 0),
+                'tx-bits-per-second' => (int) ($rate['tx-bits-per-second'] ?? 0),
+                'rx-bytes' => $rxBytes,
+                'tx-bytes' => $txBytes,
+                'rx-mb' => round($rxBytes / 1048576, 2),
+                'tx-mb' => round($txBytes / 1048576, 2),
+            ];
+        } catch (\Throwable $e) {
+            \Log::warning('Live customer traffic read failed', [
+                'router' => $routerName,
+                'username' => $username,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $empty;
+        }
+    }
+
     protected function normalizeTrafficData(array $data): array
     {
         $units = ['gbps' => 1_000_000_000, 'mbps' => 1_000_000, 'kbps' => 1_000, 'bps' => 1];
@@ -1950,7 +2105,8 @@ class MikrotikController extends Controller
                     $router->api_port,
                     $router->username,
                     $router->password,
-                    30  // extended timeout for backup operation
+                    30, // extended timeout for backup operation
+                    (bool) $router->api_ssl
                 );
 
                 $res = $api->executeCommand('/system/backup/save', [

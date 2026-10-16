@@ -58,7 +58,7 @@ class ManageUser extends Component
     protected $listeners = ['userEdit' => 'editUser', 'userDelete' => 'deleteUser'];
 
     protected $messages = [
-        'mobile.regex' => 'Mobile number must start with "880" and be 11 digits long',
+        'mobile.regex' => 'Enter an 11-digit Bangladesh mobile number starting with 01.',
     ];
 
     public function mount()
@@ -68,22 +68,34 @@ class ManageUser extends Component
         }
     }
 
-    public function userRoles()
+    private function assignableRoleNames(User $actor): array
     {
-        $query = Role::where('name', '!=', 'Reseller');
+        $query = Role::query()->where('name', '!=', 'Reseller');
 
-        if (! auth()->user()->hasRole('Super Admin')) {
-            $query->where('name', '!=', 'Super Admin');
+        if (! $actor->hasRole('Super Admin')) {
+            $allowedPermissions = $actor->getAllPermissions()->pluck('name')->all();
+            $query->where('name', '!=', 'Super Admin')
+                ->whereDoesntHave('permissions', function ($permissions) use ($allowedPermissions) {
+                    $permissions->whereNotIn('name', $allowedPermissions);
+                });
         }
 
-        $this->userRoles = $query->pluck('name')->all();
+        return $query->orderBy('name')->pluck('name')->all();
     }
 
-    public function newUser()
+    public function userRoles(): void
+    {
+        $actor = auth()->user();
+        $this->userRoles = $actor ? $this->assignableRoleNames($actor) : [];
+    }
+
+    public function newUser(): void
     {
         if (abortIfNoAccess(['Super Admin'], ['create-user'], 'You do not have permission to create users.')) {
             return;
         }
+
+        $this->reset(['user', 'name', 'email', 'mobile', 'address', 'password', 'password_confirmation', 'userId', 'roles']);
         $this->userRoles();
         $this->userType = 'Create New User';
         $this->confirmingUser = true;
@@ -96,9 +108,12 @@ class ManageUser extends Component
         }
 
         $targetUser = User::find($userId);
-        if ($targetUser && $targetUser->hasRole('Super Admin') && !auth()->user()->hasRole('Super Admin')) {
+        if (! $targetUser) {
+            flash()->error('User not found.');
+            return;
+        }
+        if ($targetUser->hasRole('Super Admin') && ! auth()->user()->hasRole('Super Admin')) {
             flash()->error('Only Super Admins can edit other Super Admins.');
-
             return;
         }
 
@@ -107,11 +122,6 @@ class ManageUser extends Component
         $this->userType = 'Edit User';
         $this->userId = $userId;
         $this->user = $targetUser->makeHidden('password');
-        if (! $this->user) {
-            flash()->error('User not found.');
-
-            return;
-        }
         $this->name = $this->user->name;
         $this->email = $this->user->email;
         $this->mobile = $this->user->mobile ?? '880';
@@ -127,9 +137,16 @@ class ManageUser extends Component
         }
 
         $targetUser = User::find($userId);
-        if ($targetUser && $targetUser->hasRole('Super Admin') && !auth()->user()->hasRole('Super Admin')) {
+        if (! $targetUser) {
+            flash()->error('User not found.');
+            return;
+        }
+        if ($targetUser->id === auth()->id()) {
+            flash()->error('You cannot delete your own account from User Management.');
+            return;
+        }
+        if ($targetUser->hasRole('Super Admin') && ! auth()->user()->hasRole('Super Admin')) {
             flash()->error('Only Super Admins can delete other Super Admins.');
-
             return;
         }
 
@@ -145,20 +162,35 @@ class ManageUser extends Component
     }
 
     #[On('sweetalert:confirmed')]
-    public function onConfirmed(array $payload): void
+    public function onConfirmed(array $payload = []): void
     {
-        // Delete the user here
-        $targetUser = User::find($this->userId);
-        if ($targetUser && $targetUser->hasRole('Super Admin') && !auth()->user()->hasRole('Super Admin')) {
-            flash()->error('Only Super Admins can delete other Super Admins.');
+        $actor = auth()->user();
+        abort_unless($actor && ($actor->hasRole('Super Admin') || $actor->can('delete-user')), 403, 'You do not have permission to delete users.');
 
+        $targetUser = User::find($this->userId);
+        if (! $targetUser) {
+            $this->userId = null;
+            flash()->error('User not found.');
+            return;
+        }
+        if ($targetUser->id === $actor->id) {
+            $this->userId = null;
+            flash()->error('You cannot delete your own account from User Management.');
+            return;
+        }
+        if ($targetUser->hasRole('Super Admin') && ! $actor->hasRole('Super Admin')) {
+            $this->userId = null;
+            flash()->error('Only Super Admins can delete other Super Admins.');
+            return;
+        }
+        if ($targetUser->hasRole('Super Admin') && User::role('Super Admin')->count() <= 1) {
+            $this->userId = null;
+            flash()->error('The last Super Admin account cannot be deleted.');
             return;
         }
 
-        if ($targetUser) {
-            $targetUser->delete();
-        }
-
+        $targetUser->delete();
+        $this->userId = null;
         flash()->success('User successfully deleted.');
     }
 
@@ -168,14 +200,35 @@ class ManageUser extends Component
         flash()->info('Deletion cancelled.');
     }
 
-    public function submitUser()
+    public function submitUser(): void
     {
+        $actor = auth()->user();
+        abort_unless($actor, 403, 'Authentication required.');
+
+        $wasEditing = filled($this->userId);
+        $existingUser = null;
+        if ($wasEditing) {
+            abort_unless($actor->hasRole('Super Admin') || $actor->can('edit-user'), 403, 'You do not have permission to edit users.');
+            $existingUser = User::find($this->userId);
+            if (! $existingUser) {
+                flash()->error('User not found.');
+                return;
+            }
+            if ($existingUser->hasRole('Super Admin') && ! $actor->hasRole('Super Admin')) {
+                flash()->error('Only Super Admins can edit other Super Admins.');
+                return;
+            }
+        } else {
+            abort_unless($actor->hasRole('Super Admin') || $actor->can('create-user'), 403, 'You do not have permission to create users.');
+        }
+
         $rules = [
             'name' => 'required|string|max:255',
             'email' => 'required|string|email:rfc,dns|max:255|unique:users,email,'.$this->userId,
-            'mobile' => ['nullable', 'string', new ValidPhoneDigits],
+            'mobile' => ['nullable', 'string', 'regex:/^01[3-9][0-9]{8}$/'],
             'address' => 'nullable|string|max:255',
-            'roles' => 'required|exists:roles,name',
+            'roles' => 'required|array|min:1',
+            'roles.*' => 'required|string|distinct|exists:roles,name',
         ];
 
         // Conditionally apply password rules
@@ -189,32 +242,60 @@ class ManageUser extends Component
 
         $this->validate($rules);
 
-        if (in_array('Super Admin', $this->roles) && !auth()->user()->hasRole('Super Admin')) {
-            flash()->error('Only Super Admins can assign the Super Admin role.');
-
+        $selectedRoles = array_values(array_unique($this->roles));
+        if (in_array('Reseller', $selectedRoles, true)) {
+            flash()->error('Reseller accounts must be managed from the Reseller module.');
             return;
         }
 
-        if ($this->userId) {
-            $existingUser = User::find($this->userId);
-            if ($existingUser && $existingUser->hasRole('Super Admin') && !auth()->user()->hasRole('Super Admin')) {
-                flash()->error('Only Super Admins can edit other Super Admins.');
-
+        if (in_array('Super Admin', $selectedRoles, true)) {
+            if (! $actor->hasRole('Super Admin') || $selectedRoles !== ['Super Admin']) {
+                flash()->error('Only Super Admins can assign the Super Admin role, and it must be the only selected role.');
+                return;
+            }
+        } elseif (! $actor->hasRole('Super Admin')) {
+            $assignableRoles = $this->assignableRoleNames($actor);
+            if (array_diff($selectedRoles, $assignableRoles)) {
+                flash()->error('You cannot assign a role with permissions beyond your own access level.');
                 return;
             }
         }
 
-        User::updateOrCreate(
-            ['id' => $this->userId],
-            [
-                'name' => $this->name,
-                'email' => $this->email,
-                'mobile' => $this->mobile ?? null,
-                'address' => $this->address ?? null,
-                // 'password' => $this->password ? bcrypt($this->password) : null,
-                'password' => $this->userId && ! $this->password ? $this->user->password : bcrypt($this->password),
-            ]
-        )->syncRoles($this->roles);
+        if ($existingUser && $existingUser->id === $actor->id && ! $actor->hasRole('Super Admin')) {
+            $currentRoles = $existingUser->getRoleNames()->sort()->values()->all();
+            $newRoles = collect($selectedRoles)->sort()->values()->all();
+            if ($currentRoles !== $newRoles) {
+                flash()->error('You cannot change your own role. Ask a Super Admin to do that.');
+                return;
+            }
+        }
+
+        if ($existingUser && $existingUser->hasRole('Super Admin') && ! in_array('Super Admin', $selectedRoles, true)
+            && User::role('Super Admin')->count() <= 1) {
+            flash()->error('The last Super Admin account cannot lose its Super Admin role.');
+            return;
+        }
+
+        $userData = [
+            'name' => $this->name,
+            'email' => $this->email,
+            'mobile' => $this->mobile ?: null,
+            'address' => $this->address ?: null,
+        ];
+
+        if (! $wasEditing || filled($this->password)) {
+            $userData['password'] = bcrypt($this->password);
+        }
+
+        if ($wasEditing) {
+            $existingUser->fill($userData);
+            $existingUser->save();
+            $savedUser = $existingUser;
+        } else {
+            $savedUser = User::create($userData);
+        }
+
+        $savedUser->syncRoles($selectedRoles);
 
         $this->reset([
             'name',
@@ -229,7 +310,7 @@ class ManageUser extends Component
         $this->userType = null;
         $this->roles = [];
 
-        if ($this->userId) {
+        if ($wasEditing) {
             flash()->success('User has been updated successfully.');
         } else {
             flash()->success('User has been created successfully.');

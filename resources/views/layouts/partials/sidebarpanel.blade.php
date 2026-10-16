@@ -1,3 +1,11 @@
+@if (auth()->check() && auth()->user()->hasRole('Reseller') && auth()->user()->reseller?->isMacPanel())
+    <ul class="navbar-nav flex-column mb-3">
+        <li class="nav-item"><div class="row navbar-vertical-label-wrapper mt-3 mb-2"><div class="col-auto navbar-vertical-label">{{ __('MAC Reseller Panel') }}</div><div class="col ps-0"><hr class="mb-0 navbar-vertical-divider" /></div></div></li>
+        <li class="nav-item"><a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('mac-reseller.dashboard') }}"><span class="nav-link-icon"><i class="bi bi-speedometer2"></i></span><span class="nav-link-text ps-1">{{ __('Dashboard') }}</span></a></li>
+        <li class="nav-item"><a wire:navigate.hover wire:current.exact="active" class="nav-link" href="{{ route('mac-reseller.customers.index') }}"><span class="nav-link-icon"><i class="bi bi-people-fill"></i></span><span class="nav-link-text ps-1">{{ __('My Clients') }}</span></a></li>
+        <li class="nav-item"><a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('mac-reseller.customers.create') }}"><span class="nav-link-icon"><i class="bi bi-person-plus-fill"></i></span><span class="nav-link-text ps-1">{{ __('Add Client') }}</span></a></li>
+    </ul>
+@else
 @if (auth()->user()->roles()->exists() || auth()->user()->permissions()->exists())
     @if (auth()->user()->hasRole('Reseller'))
         <ul class="navbar-nav flex-column mb-3" id="navbarVerticalNav">
@@ -177,7 +185,8 @@
                 </a>
                 <ul class="nav collapse" id="broadbandMenu">
                     <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('customer-add') }}"><span class="nav-link-text ps-1">{{ __('Add Customer') }}</span></a></li>
-                    <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('broadband-customers') }}"><span class="nav-link-text ps-1">{{ __('Customer List') }}</span></a></li>
+                    <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('customers.index') }}"><span class="nav-link-text ps-1">{{ __('Customer List') }}</span></a></li>
+                    <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('customer-bulk-import') }}"><span class="nav-link-text ps-1">{{ __('Customer Bulk Import') }}</span></a></li>
                     <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('broadband-customer-search') }}"><span class="nav-link-text ps-1">{{ __('Customer Search') }}</span></a></li>
                     <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('broadband-online-customers') }}"><span class="nav-link-text ps-1">{{ __('Online Customers') }}</span></a></li>
                     <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('broadband-due-customers') }}"><span class="nav-link-text ps-1">{{ __('Due Customers') }}</span></a></li>
@@ -324,7 +333,12 @@
                     <div class="d-flex align-items-center"><span class="nav-link-icon"><i class="bi bi-activity"></i></span><span class="nav-link-text ps-1">{{ __('Network Monitoring') }}</span></div>
                 </a>
                 <div class="collapse ps-4" id="networkMonitoringMenu">
+                    <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('device-manager') }}"><span class="nav-link-text ps-1">{{ __('Device Manager') }}</span></a>
+                    <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('network-events') }}"><span class="nav-link-text ps-1">{{ __('Events & Alerts') }}</span></a>
                     <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('network-map') }}"><span class="nav-link-text ps-1">{{ __('Network Map') }}</span></a>
+                    <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('network-topology.designer') }}"><span class="nav-link-text ps-1">{{ __('Topology Designer') }}</span></a>
+                    <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('network-topology.live') }}"><span class="nav-link-text ps-1">{{ __('Live Topology') }}</span></a>
+                    <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('optical-audit') }}"><span class="nav-link-text ps-1">{{ __('Virtual OTDR / Optical Audit') }}</span></a>
                     <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('traffic-monitor') }}"><span class="nav-link-text ps-1">{{ __('Traffic Monitor') }}</span></a>
                     <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('high-usage-monitor') }}"><span class="nav-link-text ps-1">{{ __('High Usage Monitor') }}</span></a>
                     <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('device-watcher') }}"><span class="nav-link-text ps-1">{{ __('Device Watcher') }}</span></a>
@@ -343,6 +357,9 @@
                     <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('network-inventory') }}"><span class="nav-link-text ps-1">{{ __('Dashboard') }}</span></a>
                     <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('network-inventory.mikrotik') }}"><span class="nav-link-text ps-1">{{ __('MikroTik Management') }}</span></a>
                     <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('network-inventory.olt') }}"><span class="nav-link-text ps-1">{{ __('OLT Management') }}</span></a>
+                    <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('network-inventory.onu-management') }}"><span class="nav-link-text ps-1">{{ __('ONU Management') }}</span></a>
+                    <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('network-monitoring') }}"><span class="nav-link-text ps-1">{{ __('Customer Network Monitoring') }}</span></a>
+                    <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('network-inventory.olt') }}#olt-provisioning"><span class="nav-link-text ps-1">{{ __('OLT / ONU Provisioning') }}</span></a>
                     <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('network-inventory.switches') }}"><span class="nav-link-text ps-1">{{ __('Switch Management') }}</span></a>
                     <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('network-inventory.access-points') }}"><span class="nav-link-text ps-1">{{ __('Access Point Management') }}</span></a>
                 </div>
@@ -442,6 +459,7 @@
                     <div class="collapse ps-4" id="{{ $menuId }}">
                         <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route($route) }}">{{ __('Overview') }}</a>
                         <a wire:navigate.hover class="nav-link" href="{{ route('site-settings') }}">{{ __('Site Settings') }}</a>
+                        <a wire:navigate.hover class="nav-link" href="{{ route('company-settings') }}">{{ __('Company Settings') }}</a>
                         <a wire:navigate.hover class="nav-link" href="{{ route('mikrotik-sync') }}">{{ __('MikroTik Setup') }}</a>
                         <a wire:navigate.hover class="nav-link" href="{{ route('sms-setup') }}">{{ __('SMS Setup') }}</a>
                         <a wire:navigate.hover class="nav-link" href="{{ route('main-site-setup') }}">{{ __('Main Site Setup') }}</a>
@@ -586,6 +604,12 @@
                     </div>
                 </a>
                 <ul class="nav collapse" id="smsSetupDropdown">
+                    <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('sms-service') }}"><span class="nav-link-text ps-1">{{ __('SMS Service Overview') }}</span></a></li>
+                    <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('sms-service.send') }}"><span class="nav-link-text ps-1">{{ __('Send SMS') }}</span></a></li>
+                    <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('sms-service.bulk') }}"><span class="nav-link-text ps-1">{{ __('Bulk Campaign') }}</span></a></li>
+                    <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('sms-service.templates') }}"><span class="nav-link-text ps-1">{{ __('SMS Templates') }}</span></a></li>
+                    <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('sms-service.gateway') }}"><span class="nav-link-text ps-1">{{ __('SMS Gateway') }}</span></a></li>
+                    <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('sms-service.reports') }}"><span class="nav-link-text ps-1">{{ __('SMS Reports & Delivery History') }}</span></a></li>
                     <li class="nav-item">
                         <a wire:navigate.hover wire:current="active" class="nav-link"
                             href="{{ route('sms-setup') }}">
@@ -622,4 +646,6 @@
             </a>
         </li>
     </ul>
+@endif
+
 @endif

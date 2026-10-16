@@ -1,6 +1,6 @@
 <nav id="navbar" class="navbar navbar-expand-lg fixed-top bg-body-tertiary z-3">
     <div class="container-fluid">
-        <a wire:navigate.hover wire:current="active" href="/" class="navbar-brand d-flex align-items-center mb-md-0 me-md-auto link-body-emphasis text-decoration-none">
+        <a wire:navigate.hover wire:current="active" href="{{ route('dashboard') }}" class="navbar-brand d-flex align-items-center mb-md-0 me-md-auto link-body-emphasis text-decoration-none">
             <!-- Logo -->
             <x-application-mark class="sidebar-logo" style="height: 2rem !important; width: 3rem !important;" />
             {{-- {!! siteUrlSettings('site_name') !!} --}}

@@ -52,23 +52,6 @@ class ImportController extends Controller
             $reader = SimpleExcelReader::create($filePath);
             $rows = $reader->getRows();
 
-            // Fetch customer ID settings
-            $prefix = siteUrlSettings('customer_id_prefix') ?: 'FCNET';
-            $lastCustomerUniqueId = CustomersInfo::orderBy('id', 'desc')->value('customer_unique_id');
-            if ($lastCustomerUniqueId) {
-                if (str_starts_with($lastCustomerUniqueId, $prefix)) {
-                    $lastIdCount = (int) substr($lastCustomerUniqueId, strlen($prefix));
-                } else {
-                    if (preg_match('/(\d+)$/', $lastCustomerUniqueId, $matches)) {
-                        $lastIdCount = (int) $matches[1];
-                    } else {
-                        $lastIdCount = 99;
-                    }
-                }
-            } else {
-                $lastIdCount = 99;
-            }
-
             foreach ($rows as $row) {
                 // Normalize keys to lowercase and trim spaces/underscores for flexible column matching
                 $normalizedRow = [];
@@ -106,6 +89,13 @@ class ImportController extends Controller
                 if (!$pppSecret) {
                     $skippedRows++;
                     $skippedUsernames[] = $pppoeUsername;
+                    continue;
+                }
+
+                // Customer Unique Id is manual-only. Import must receive it from the source file; never invent one.
+                if (!$importedUniqueId) {
+                    $skippedRows++;
+                    $skippedUsernames[] = $pppoeUsername.' (missing Customer Unique Id)';
                     continue;
                 }
 
@@ -157,12 +147,8 @@ class ImportController extends Controller
 
                     $uploadedRows++;
                 } else {
-                    // Create
+                    // Create using the manually supplied Customer Unique Id only.
                     $newId = $importedUniqueId;
-                    if (!$newId) {
-                        $lastIdCount++;
-                        $newId = $prefix.$lastIdCount;
-                    }
 
                     CustomersInfo::create([
                         'customer_unique_id' => $newId,
@@ -182,7 +168,11 @@ class ImportController extends Controller
                     ]);
 
                     OfficialInfo::create([
-                        'customer_office_unique_id' => $newId
+                        'customer_office_unique_id' => $newId,
+                        'billing_type' => 'prepaid',
+                        'connection_type' => 'fiber',
+                        'connectivity_type' => 'shared',
+                        'client_type' => 'home',
                     ]);
 
                     $uploadedRows++;

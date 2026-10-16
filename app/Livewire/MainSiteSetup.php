@@ -194,6 +194,10 @@ class MainSiteSetup extends Component implements HasActions, HasForms
             }
         }
 
+        // Filament FileUpload expects array state even for legacy single-path values
+        // stored inside repeater records. Normalize only in-memory form state.
+        $this->normalizeNestedFileUploadState($settings);
+
         $this->data = $settings;
         $this->form->fill($settings);
         $this->contentForm->fill($settings);
@@ -213,36 +217,36 @@ class MainSiteSetup extends Component implements HasActions, HasForms
             FileUpload::make('site_logo')
                 ->label('Main Site Logo')
                 ->image()
-                ->multiple()
                 ->maxFiles(1)
+                ->disk('public')
                 ->directory('brand')
                 ->helperText('Recommended: 190x53px transparent PNG'),
             FileUpload::make('site_icon')
                 ->label('Square App Icon')
                 ->image()
-                ->multiple()
                 ->maxFiles(1)
+                ->disk('public')
                 ->directory('brand')
                 ->helperText('Used for smaller UI elements (1:1 ratio)'),
             FileUpload::make('site_favicon')
                 ->label('Browser Favicon')
                 ->image()
-                ->multiple()
                 ->maxFiles(1)
+                ->disk('public')
                 ->directory('brand')
                 ->helperText('Standard browser tab icon (16x16 or 32x32)'),
             FileUpload::make('site_invoice_logo')
                 ->label('Invoice Logo')
                 ->image()
-                ->multiple()
                 ->maxFiles(1)
+                ->disk('public')
                 ->directory('invoices')
                 ->helperText('Logo displayed specifically on invoices.'),
             FileUpload::make('site_invoice_signature')
                 ->label('Authorized Signature')
                 ->image()
-                ->multiple()
                 ->maxFiles(1)
+                ->disk('public')
                 ->directory('invoices'),
             RichEditor::make('site_invoice_terms')
                 ->label('Terms & Conditions')
@@ -260,9 +264,9 @@ class MainSiteSetup extends Component implements HasActions, HasForms
         return $schema->components([
             FileUpload::make('btcl_tariff_pdf')
                 ->label('BTCL Tariff PDF')
-                ->multiple()
                 ->maxFiles(1)
                 ->acceptedFileTypes(['application/pdf'])
+                ->disk('public')
                 ->directory('documents')
                 ->helperText('Upload the BTCL Tariff PDF document.'),
             Repeater::make('hero_slides')
@@ -278,6 +282,7 @@ class MainSiteSetup extends Component implements HasActions, HasForms
                         ->automaticallyResizeImagesToHeight('720')
                         ->rules(['image', 'max:20480'])
                         ->required()
+                        ->disk('public')
                         ->directory('hero'),
                     TextInput::make('caption')->placeholder('Slide caption...'),
                 ])->grid(3),
@@ -300,6 +305,7 @@ class MainSiteSetup extends Component implements HasActions, HasForms
                     FileUpload::make('logo')
                         ->label('Client Logo')
                         ->image()
+                        ->disk('public')
                         ->directory('clients')
                         ->helperText('If uploaded, the logo will be shown. If not, the name will be used.'),
                     TextInput::make('link')
@@ -332,6 +338,7 @@ class MainSiteSetup extends Component implements HasActions, HasForms
                     FileUpload::make('image')
                         ->label('Image')
                         ->image()
+                        ->disk('public')
                         ->directory('gallery')
                         ->required(),
                     TextInput::make('caption')
@@ -365,23 +372,40 @@ class MainSiteSetup extends Component implements HasActions, HasForms
     public function save(): void
     {
         $oldLocale = MainSiteData::getValue('site_locale', 'en');
+        foreach (['site_logo', 'site_icon', 'site_favicon', 'site_invoice_logo', 'site_invoice_signature', 'btcl_tariff_pdf'] as $field) {
+            $value = $this->data[$field] ?? null;
+            if (is_array($value) && count($value) > 1) {
+                // Filament can retain an old path beside the newly uploaded file.
+                // Keep only the newest item before FileUpload validates maxFiles(1).
+                $this->data[$field] = [array_key_last($value) => end($value)];
+            } elseif (is_string($value) && $value !== '') {
+                // Legacy persisted settings are scalar paths, while FileUpload requires array state.
+                $this->data[$field] = [(string) Str::uuid() => $value];
+            } elseif ($value === null) {
+                $this->data[$field] = [];
+            }
+        }
+
+        // Normalize the actual Filament form state too; changing the Livewire backing
+        // array alone leaves the schema's internal state unchanged during validation.
+        $this->form->fill($this->data);
+        $this->contentForm->fill($this->data);
+
         try {
             $state = $this->form->getState();
             $contentState = $this->contentForm->getState();
 
-            // After getState() processes uploads (saves files to disk), $this->data may contain
-            // multiple entries for single-file fields: old path(s) + the newly saved path.
-            // Extract the LAST string path (newest file) from $this->data for each field.
+            // Keep Livewire/Filament upload state array-shaped through the response cycle.
+            // Prepare a separate persistence copy so stored settings use plain file paths.
+            $settingsToSave = $this->data;
             foreach ($this->getSingleFileUploadFields() as $field) {
-                $val = $this->data[$field] ?? null;
+                $val = $settingsToSave[$field] ?? null;
                 if (is_array($val)) {
-                    // Filter to only string values (skip any leftover TemporaryUploadedFile objects)
-                    $paths = array_filter($val, 'is_string');
-                    // Take the last entry which is the most recently saved file
-                    $this->data[$field] = $paths ? end($paths) : null;
+                    $paths = array_values(array_filter($val, 'is_string'));
+                    $settingsToSave[$field] = $paths ? end($paths) : null;
                 }
-                // If it's already a string, leave it as-is
             }
+            $this->collapseNestedFileUploadState($settingsToSave);
         } catch (ValidationException $e) {
             Log::error('MainSiteSetup validation failed: '.json_encode($e->errors()));
             flash()->error('Validation failed: '.implode(', ', Arr::flatten($e->errors())));
@@ -427,12 +451,9 @@ class MainSiteSetup extends Component implements HasActions, HasForms
 
         try {
             foreach ($keys as $key) {
-                if (array_key_exists($key, $this->data)) {
-                    $value = $this->data[$key];
-                    // If it is a single file upload field, save only the filepath string to the DB
-                    if (in_array($key, $singleFileFields) && is_array($value)) {
-                        $value = array_values(array_filter($value))[0] ?? null;
-                    }
+                if (array_key_exists($key, $settingsToSave)) {
+                    $value = $settingsToSave[$key];
+                    // File upload state was normalized only in the persistence copy above.
                     MainSiteData::setValue($key, $value);
                 }
             }
@@ -936,6 +957,71 @@ class MainSiteSetup extends Component implements HasActions, HasForms
             foreach ($presets[$preset] as $key => $value) {
                 $this->data[$key] = $value;
             }
+        }
+    }
+
+    private function normalizeNestedFileUploadState(array &$settings): void
+    {
+        $uploadFields = [
+            'hero_slides' => ['image'],
+            'valuable_clients' => ['logo'],
+            'gallery_items' => ['image'],
+        ];
+
+        foreach ($uploadFields as $repeater => $fields) {
+            if (! is_array($settings[$repeater] ?? null)) {
+                continue;
+            }
+
+            foreach ($settings[$repeater] as &$item) {
+                if (! is_array($item)) {
+                    continue;
+                }
+
+                foreach ($fields as $field) {
+                    $value = $item[$field] ?? null;
+                    $paths = is_string($value) && $value !== ''
+                        ? [$value]
+                        : (is_array($value) ? array_values(array_filter($value, static fn ($path) => is_string($path) && $path !== '')) : []);
+
+                    $normalized = [];
+                    foreach ($paths as $path) {
+                        $normalized[(string) Str::uuid()] = $path;
+                    }
+                    $item[$field] = $normalized;
+                }
+            }
+            unset($item);
+        }
+    }
+
+    private function collapseNestedFileUploadState(array &$data): void
+    {
+        $uploadFields = [
+            'hero_slides' => ['image'],
+            'valuable_clients' => ['logo'],
+            'gallery_items' => ['image'],
+        ];
+
+        foreach ($uploadFields as $repeater => $fields) {
+            if (! is_array($data[$repeater] ?? null)) {
+                continue;
+            }
+
+            foreach ($data[$repeater] as &$item) {
+                if (! is_array($item)) {
+                    continue;
+                }
+
+                foreach ($fields as $field) {
+                    $value = $item[$field] ?? null;
+                    if (is_array($value)) {
+                        $paths = array_values(array_filter($value, static fn ($path) => is_string($path) && $path !== ''));
+                        $item[$field] = $paths ? end($paths) : null;
+                    }
+                }
+            }
+            unset($item);
         }
     }
 

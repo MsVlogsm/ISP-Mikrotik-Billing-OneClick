@@ -220,7 +220,7 @@ If you develop a new program, and you want it to be of the greatest possible use
 To do so, attach the following notices to the program.  It is safest to attach them to the start of each source file to most effectively state the exclusion of warranty; and each file should have at least the "copyright" line and a pointer to where the full notice is found.
 
      Mikrotik API - ISP Billing System integration
-     Copyright (C) 2026 CodePagol
+     Copyright (C) 2026 X-Link LTD
 
      This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
 
@@ -240,12 +240,12 @@ You should also get your employer (if you work as a programmer) or school, if an
 
 এই প্রজেক্টটি GNU Affero General Public License v3 (AGPL-3.0) এর অধীনে লাইসেন্সকৃত। 
 
-কপিরাইট (c) ২০২৬ CodePagol
+কপিরাইট (c) ২০২৬ X-Link LTD
 
 সহজ ভাষায় এই লাইসেন্সের মূল শর্তাবলী ও নিয়মসমূহ:
 ১. **ব্যবহার ও এডিট করার স্বাধীনতা:** যে কেউ এই সফটওয়্যারটি ব্যবহার, পরিবর্তন এবং নিজের প্রয়োজনমতো এডিট করতে পারবে।
 ২. **এডিট করে বিক্রি করার অনুমতি:** কেউ চাইলে সফটওয়্যারটি এডিট বা পরিবর্তন করে বিক্রি করতে পারবে (বাণিজ্যিক ব্যবহার অনুমোদিত)।
 ৩. **কোড ব্লক বা ক্লোজ-সোর্স করা নিষিদ্ধ:** কেউ এডিট বা মডিফাই করে বিক্রি করলেও কোডটি নিজের জন্য ব্লক বা ক্লোজড-সোর্স (Closed Source) করতে পারবে না। তাকে অবশ্যই সম্পূর্ণ সোর্স কোডটি এই একই AGPLv3 লাইসেন্সের অধীনে ওপেন রাখতে হবে।
 ৪. **SaaS বা ক্লাউড হোস্টিং নিষেধাজ্ঞা (SaaS Loophole Protection):** অনেকে সোর্স কোড নিজের সার্ভারে হোস্ট করে কাস্টমারদের সার্ভিস হিসেবে (Software as a Service - SaaS) ব্যবহার করতে দেয় কিন্তু সোর্স কোড রিলিজ করে না। AGPLv3 লাইসেন্স অনুযায়ী, কেউ যদি এই সফটওয়্যারটি কোনো নেটওয়ার্ক সার্ভারে হোস্ট করে সেবা প্রদান (SaaS) করে, তবে তার ব্যবহারকারী কাস্টমারদের বাধ্যতামূলকভাবে সেই পরিবর্তিত সোর্স কোডটি ডাউনলোড করার সুযোগ দিতে হবে। অর্থাৎ, হোস্টিং করেও কোড লুকিয়ে রাখা যাবে না।
-৫. **অ্যাট্রিবিউশন এবং কপিরাইট:** কোনো কোম্পানি বা ব্যক্তি এই কোডটিকে নিজের নামে দাবি করতে পারবে না। মূল কপিরাইটে সর্বদা **CodePagol**-এর নাম ও ক্রেডিট নোটিশ থাকতে হবে।
+৫. **অ্যাট্রিবিউশন এবং কপিরাইট:** কোনো কোম্পানি বা ব্যক্তি এই কোডটিকে নিজের নামে দাবি করতে পারবে না। মূল কপিরাইট ও তৃতীয় পক্ষের লাইসেন্স নোটিশ অক্ষুণ্ণ রাখতে হবে।
 

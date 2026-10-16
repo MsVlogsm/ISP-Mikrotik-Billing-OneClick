@@ -412,11 +412,6 @@
                             © {{ siteUrlSettings('site_name') ?? config('app.name') }} {{ date('Y') }}. All Rights Reserved
                         </p>
                     </div>
-                    <div class="col-md-6 text-md-end text-center">
-                        <p class="text-muted small mb-0">
-                            Designed & Develoved by : <a href="https://codepagol.com" target="_blank" class="text-muted text-decoration-none fw-semibold">CodePagol</a>
-                        </p>
-                    </div>
                 </div>
             </div>
         </div>

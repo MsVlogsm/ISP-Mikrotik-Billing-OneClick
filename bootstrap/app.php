@@ -32,6 +32,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->append(CheckSiteStatus::class);
         $middleware->alias([
             'reseller'           => \App\Http\Middleware\EnsureUserIsReseller::class,
+            'mac-reseller'       => \App\Http\Middleware\EnsureUserIsMacReseller::class,
             'restrict.profile'   => \App\Http\Middleware\RestrictToProfileIfNoPermissions::class,
             'permission'         => \Spatie\Permission\Middleware\PermissionMiddleware::class,
             'role'               => \Spatie\Permission\Middleware\RoleMiddleware::class,

@@ -25,12 +25,13 @@ class EnsureUserIsReseller
         // Check if user has the reseller relation and status is active
         if (!$user->reseller || !$user->reseller->isActive()) {
             Auth::guard('web')->logout();
-            
             $request->session()->invalidate();
             $request->session()->regenerateToken();
 
             return redirect()->route('login')->with('error', 'Your reseller account is suspended or not initialized.');
         }
+
+        abort_if($user->reseller->isMacPanel(), 403, 'Use the MAC Reseller panel for this account.');
 
         return $next($request);
     }

@@ -17,6 +17,26 @@
 @media(max-width:1199px){.analysis-dual{grid-template-columns:1fr}.analysis-chart-compact{height:230px}.analytics-library-view .dashboard-card-deck{--db-cols:3}}
 @media(max-width:991px){.dashboard-panels{grid-template-columns:1fr!important;grid-auto-rows:auto}.dashboard-panels .dashboard-panel,.dashboard-panels .panel-span-full{grid-column:1!important;grid-row-end:auto!important}.analytics-library-view .dashboard-card-deck{--db-cols:2}}
 @media(max-width:575px){.analysis-dual{padding:10px}.analysis-chart-compact{height:215px}.dashboard-chart-shell.tall-chart{height:320px}.analytics-library-view .dashboard-card-deck{--db-cols:1}.analytics-staff-table{font-size:.75rem}}
+
+/* v1.3.0.67 — stable dashboard panel layout. Avoid calculated masonry rows because dynamic chart/content heights can overlap adjacent panels. */
+.dashboard-panels{
+  grid-auto-rows:auto!important;
+  grid-auto-flow:row!important;
+  align-items:stretch!important;
+}
+.dashboard-panels>.dashboard-panel{
+  grid-row:auto!important;
+  align-self:stretch!important;
+  min-height:0;
+}
+@media(min-width:992px){
+  .dashboard-panels{grid-template-columns:minmax(0,1.35fr) minmax(300px,.85fr)!important}
+}
+@media(max-width:991px){
+  .dashboard-panels{grid-template-columns:1fr!important;grid-auto-rows:auto!important}
+  .dashboard-panels>.dashboard-panel{grid-column:1!important;grid-row:auto!important}
+}
+
 /* v2.0.12 reference-inspired dashboard presets */
 .preset-informative-isp{--db-radius:8px;--db-gap:9px;--db-shadow:0 3px 10px rgba(15,23,42,.07)}
 .preset-informative-isp .dashboard-card-deck{gap:9px}
@@ -75,3 +95,6 @@
 .preset-portal-action-cards.size-large .dashboard-card{min-height:165px;padding:23px 23px 59px}.preset-portal-action-cards.size-large .dashboard-card:after{height:49px}.preset-portal-action-cards.size-large .dashboard-card-icon{width:76px;height:49px;font-size:1.55rem}.preset-portal-action-cards.size-large .dashboard-card-open{bottom:16px}.preset-portal-action-cards.size-large .dashboard-card-label{font-size:.88rem}.preset-portal-action-cards.size-large .dashboard-card-value{font-size:2rem}.preset-portal-action-cards.size-large .dashboard-card-sub{font-size:.78rem}
 html[data-bs-theme="dark"] .preset-portal-action-cards .dashboard-card-icon{background:color-mix(in srgb,var(--portal-tone) 20%,#101827);color:#fff}
 @media(max-width:575px){.preset-portal-action-cards .dashboard-card{min-height:122px;padding:15px 15px 45px}.preset-portal-action-cards .dashboard-card:after{height:38px}.preset-portal-action-cards .dashboard-card-icon{height:38px;width:58px}.preset-portal-action-cards .dashboard-card-value{font-size:1.5rem}}
+
+/* Compact live status/date line and collapsible KPI deck, aligned with the ISP Radar reference. */
+.dashboard-heading-main{min-width:0}.dashboard-meta-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px}.dashboard-local-clock{font-size:.72rem;font-weight:700;color:var(--bs-secondary-color);font-variant-numeric:tabular-nums}.dashboard-monitor-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border:1px solid var(--bs-border-color);border-radius:999px;background:var(--bs-tertiary-bg);font-size:.68rem;line-height:1.2;color:var(--bs-secondary-color);white-space:nowrap}.dashboard-monitor-pill strong{color:var(--bs-emphasis-color);font-variant-numeric:tabular-nums}.dashboard-monitor-dot{width:6px;height:6px;border-radius:50%;background:#16a34a;box-shadow:0 0 0 3px rgba(22,163,74,.12);animation:dashboardMonitorPulse 1.8s infinite}.dashboard-expand-metrics{white-space:nowrap;align-self:center}.dashboard-metric-count{display:inline-block;min-width:1.6em;margin-left:3px;padding:1px 4px;border-radius:6px;background:var(--bs-tertiary-bg);font-size:.68rem;font-weight:800}.dashboard-card[hidden]{display:none!important}@keyframes dashboardMonitorPulse{0%,100%{box-shadow:0 0 0 2px rgba(22,163,74,.10)}50%{box-shadow:0 0 0 5px rgba(22,163,74,.03)}}@media(prefers-reduced-motion:reduce){.dashboard-monitor-dot{animation:none}}@media(max-width:575px){.dashboard-controlbar{gap:8px}.dashboard-expand-metrics{font-size:.72rem;padding:.3rem .45rem}.dashboard-local-clock{font-size:.66rem}}

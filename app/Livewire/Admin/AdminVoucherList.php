@@ -27,7 +27,7 @@ class AdminVoucherList extends Component
 
     public function render()
     {
-        if (! hasAccess(['Super Admin'], ['all-customer'])) {
+        if (! hasAccess(['Super Admin'], ['view-vouchers'])) {
             abort(403, 'Unauthorized action.');
         }
 

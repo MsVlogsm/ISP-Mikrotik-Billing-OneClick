@@ -1,9 +1,9 @@
 /**
  * app.js — Unified Main Entry Point
  * ============================================================================
- * Merged: original app.js + cp.js + codepagol.js + config.js
- * Deleted duplicates: main-site.js, codepagol.js, config.js,
- *                     custom copy.js, theme copy.js, codepagol copy.js
+ * Merged: original app.js + controller scripts + config.js
+ * Deleted duplicates: main-site.js, legacy controller, config.js,
+ *                     custom copy.js, theme copy.js, legacy controller copy
  * ============================================================================
  */
 
@@ -87,8 +87,8 @@ import 'datatables.net-staterestore-bs5';
 DataTable.Buttons.jszip(JSZip);
 DataTable.Buttons.pdfMake(pdfmake);
 
-// ── CP (CodePagol) Controller ─────────────────────────────────────────────────
-// Replaces: cp.js + codepagol.js + config.js — merged here once, no duplicates
+// ── CP Controller ─────────────────────────────────────────────────
+// Replaces: controller scripts + config.js — merged here once, no duplicates
 
 const CP = {
     /**

@@ -68,11 +68,19 @@
     <input type="number" id="{{ $name }}" placeholder="{{ __($placeholder ?? '00.00') }}" name="{{ $name }}" value="{{ old($name) }}" class="form-control {{ $class ?? '' }} @error($name) is-invalid @enderror" wire:model="{{ $name }}" min="0" value="{{ $value ?? '' }}" @if (isset($wInput) && $wInput != '') wire:input="{{ $wInput }}" @endif @if ($readonly ?? false) readonly @endif>
     <x-error name='{{ $name }}' />
 @elseif ($type == 'mobile')
-    <div class="input-group input-group-sm">
-        <span class="input-group-text">+88</span>
-        <input type="number" id="{{ $name }}" class="form-control {{ $class ?? '' }} @error($name) is-invalid @enderror" placeholder="{{ __($placeholder ?? $label) }}" name="{{ $name }}" wire:model="{{ $name }}" maxlength="11" oninput="javascript: if (this.value.length > this.maxLength) this.value = this.value.slice(0, this.maxLength);" pattern="[0-9]{11}">
-        <x-error name='{{ $name }}' />
-    </div>
+    <input
+        type="text"
+        id="{{ $name }}"
+        class="form-control {{ $class ?? '' }} @error($name) is-invalid @enderror"
+        placeholder="{{ __($placeholder ?? '01XXXXXXXXX') }}"
+        name="{{ $name }}"
+        wire:model="{{ $name }}"
+        inputmode="numeric"
+        autocomplete="tel-national"
+        maxlength="11"
+        pattern="01[3-9][0-9]{8}"
+    >
+    <x-error name='{{ $name }}' />
 @elseif ($type == 'dropdown')
     <select class="form-control {{ $class ?? '' }} @error($name) is-invalid @enderror" name="{{ $name }}" wire:model="{{ $name }}" id="{{ $name }}" @if (isset($wChange) && $wChange != '') wire:change="{{ $wChange }}" @endif {{ $multiple ?? false ? 'multiple' : '' }} style="{{ $inputStyle ?? '' }}">
         @if ($placeholder != '')

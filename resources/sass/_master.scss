@@ -1,6 +1,6 @@
 // =============================================================================
 // _master.scss — Consolidated Custom Styles (NO DUPLICATES)
-// Merges: app.scss custom parts + codepagol.scss
+// Merges: app.scss custom parts and project theme utilities
 // =============================================================================
 
 @import 'breakpoints';
@@ -19,7 +19,7 @@ $teal-green-light: #1dae7cc3;
 $teal-green-dark: #8fe7c87c;
 $text-opacity: 1;
 
-// NOTE: Custom width pixel/percentage/fraction utility classes are now handled dynamically by Tailwind CSS (e.g., cp-w-[100px], cp-w-1/2) to prevent compiled CSS bloat.
+// NOTE: Custom width pixel/percentage/fraction utility classes are now handled dynamically by Tailwind CSS (e.g., custom width utility classes) to prevent compiled CSS bloat.
 // -----------------------------------------------------------------------------
 // 4. GLOBAL HELPERS
 // -----------------------------------------------------------------------------

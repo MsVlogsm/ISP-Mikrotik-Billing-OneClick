@@ -66,13 +66,23 @@
         <input type="number" id="{{ $name }}" placeholder="{{ __($placeholder ?? '00.00') }}" name="{{ $name }}" value="{{ old($name) }}" class="form-control @error($name) is-invalid @enderror" wire:model="{{$name}}" min="0" value="{{ $value ?? '' }}"  @if (isset($wInput) && $wInput != '') wire:input="{{ $wInput }}" @endif @if($readonly ?? false) readonly @endif>
         <x-error name='{{ $name }}' />
     @elseif ($type == 'mobile')
-        <div wire:ignore>
-            <input type="text" id="{{ $name }}" class="form-control form-control-sm @error($name) is-invalid @enderror" placeholder="{{ __($placeholder ?? $label) }}" name="{{ $name }}" x-data="intlTelInput('{{ $name }}')" value="{{ isset($this->{$name}) ? $this->{$name} : '' }}">
-        </div>
+        <input
+            type="text"
+            id="{{ $name }}"
+            name="{{ $name }}"
+            class="form-control form-control-sm @error($name) is-invalid @enderror"
+            placeholder="{{ __($placeholder ?? '01XXXXXXXXX') }}"
+            inputmode="numeric"
+            autocomplete="tel-national"
+            maxlength="11"
+            pattern="01[3-9][0-9]{8}"
+            wire:model="{{ $name }}"
+            @if($required ?? false) required @endif
+        >
         <x-error name='{{ $name }}' />
     @elseif ($type == 'dropdown')
-        <select class="form-control @error($name) is-invalid @enderror" name="{{ $name }}" wire:model="{{$name}}" id="{{$name}}" @if (isset($wChange) && $wChange != '') wire:change="{{ $wChange }}" @endif {{ ($multiple ?? false) ? 'multiple' : '' }} style="{{ $inputStyle ?? '' }}">
-            @if ($placeholder != '')
+        <select class="form-control @error($name) is-invalid @enderror" name="{{ $name }}" @if($live ?? false) wire:model.live="{{ $name }}" @else wire:model="{{ $name }}" @endif id="{{$name}}" @if (isset($wChange) && $wChange != '') wire:change="{{ $wChange }}" @endif {{ ($multiple ?? false) ? 'multiple' : '' }} style="{{ $inputStyle ?? '' }}">
+            @if (($placeholder ?? '') != '')
                 <option value="">{{ __($placeholder ?? $label) }}</option>
             @endif
             @foreach ($options ?? [] as $option)
@@ -82,7 +92,7 @@
         <x-error name='{{ $name }}' />
     @elseif ($type == 'dropdownKey')
         <select class="form-control @error($name) is-invalid @enderror" name="{{ $name }}" wire:model="{{$name}}" id="{{$name}}" @if (isset($wChange) && $wChange != '') wire:change="{{ $wChange }}" @endif {{ ($multiple ?? false) ? 'multiple' : '' }} style="{{ $inputStyle ?? '' }}">
-            @if ($placeholder != '')
+            @if (($placeholder ?? '') != '')
                 <option value="">{{ __($placeholder ?? $label) }}</option>
             @endif
             @foreach ($options ?? [] as $key => $option)

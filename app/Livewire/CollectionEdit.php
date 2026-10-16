@@ -43,11 +43,18 @@ class CollectionEdit extends Component
 
     public function mount()
     {
-        if (! hasAccess(['Super Admin'], ['payment-collection-edit'])) {
-            abort(403, 'Unauthorized action.');
-        }
-
+        $this->authorizeCollectionEdit();
         return true;
+    }
+
+    private function authorizeCollectionEdit(): void
+    {
+        abort_unless(hasAccess(['Super Admin'], ['payment-collection-edit']), 403, 'You do not have permission to edit payment collections.');
+    }
+
+    private function authorizeCollectionDelete(): void
+    {
+        abort_unless(hasAccess(['Super Admin'], ['payment-delete']), 403, 'You do not have permission to delete or reverse a payment collection.');
     }
 
     /**
@@ -137,6 +144,7 @@ class CollectionEdit extends Component
 
     public function savePayment()
     {
+        $this->authorizeCollectionEdit();
         DB::beginTransaction();
         try {
             CollectionSummary::create([
@@ -183,6 +191,7 @@ class CollectionEdit extends Component
 
     public function selectCustomer($value)
     {
+        $this->authorizeCollectionEdit();
         // $this->paid_amount;
         $this->expire_date = '';
         $customer_id = decrypt($value);
@@ -212,6 +221,7 @@ class CollectionEdit extends Component
 
     public function deleteCollection($id)
     {
+        $this->authorizeCollectionDelete();
         $collection = CollectionSummary::find($id);
         if ($collection) {
             $colleted = $collection->collection_amount;

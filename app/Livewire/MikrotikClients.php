@@ -30,14 +30,31 @@ class MikrotikClients extends Component
     {
         abort_unless(hasAccess(['Super Admin'], ['all-customer']), 403);
 
-        $routers = RouterList::query()->orderBy('router_name')->get();
-        $profiles = PPPSecrets::query()->when($this->router, fn ($q) => $q->where('router_name', $this->router))
+        // Import From MikroTik must only expose routers that are explicitly connected.
+        // A disconnected/disabled router may still have historical PPPSecrets in the local DB,
+        // but those records must never appear as an import source.
+        $routers = RouterList::query()->where('action', 'connected')->orderBy('router_name')->get();
+        $profiles = PPPSecrets::query()
+            ->whereExists(function ($q) {
+                $q->selectRaw('1')
+                    ->from('router_lists')
+                    ->whereColumn('router_lists.router_name', 'p_p_p_secrets.router_name')
+                    ->where('router_lists.action', 'connected');
+            })
+            ->when($this->router, fn ($q) => $q->where('router_name', $this->router))
             ->whereNotNull('profile')->where('profile', '!=', '')->distinct()->orderBy('profile')->pluck('profile');
 
         $clients = PPPSecrets::query()->with('customer')
             // Manual Client List export: once a PPP secret is exported and linked,
             // remove it from this pending MikroTik import/sync list. Never delete the PPP secret.
             ->whereDoesntHave('customer')
+            // Hard gate: local PPP records are importable only while their router is connected.
+            ->whereExists(function ($q) {
+                $q->selectRaw('1')
+                    ->from('router_lists')
+                    ->whereColumn('router_lists.router_name', 'p_p_p_secrets.router_name')
+                    ->where('router_lists.action', 'connected');
+            })
             ->when($this->router, fn ($q) => $q->where('router_name', $this->router))
             ->when($this->protocol, fn ($q) => $q->whereRaw('upper(service) = ?', [strtoupper($this->protocol)]))
             ->when($this->profile, fn ($q) => $q->where('profile', $this->profile))
@@ -79,6 +96,11 @@ class MikrotikClients extends Component
     {
         abort_unless(hasAccess(['Super Admin'], ['enable-pending-customer']), 403);
         $secret = PPPSecrets::findOrFail($id);
+        $router = RouterList::where('router_name', $secret->router_name)->first();
+        if (! $router || $router->action !== 'connected') {
+            flash()->warning("Router {$secret->router_name} is disabled/disconnected. Network action blocked.");
+            return;
+        }
         $disabled = in_array(strtolower((string) $secret->status), ['disabled', 'inactive'], true);
         app(MikrotikController::class)->togglePPPSecret($secret->customer?->customer_unique_id ?? $secret->username, $secret->router_name, $secret->username, $disabled ? 'enable' : 'disable');
         $secret->status = $disabled ? 'enabled' : 'disabled';
@@ -103,6 +125,11 @@ class MikrotikClients extends Component
 
         if ($id !== null) {
             $secret = PPPSecrets::with('customer')->findOrFail($id);
+            $router = RouterList::where('router_name', $secret->router_name)->first();
+            if (! $router || $router->action !== 'connected') {
+                flash()->warning("Router {$secret->router_name} is disabled/disconnected. Import is unavailable.");
+                return;
+            }
             if ($secret->customer) {
                 flash()->info("{$secret->username} is already in Client List.");
                 return;
@@ -111,38 +138,27 @@ class MikrotikClients extends Component
             return;
         }
 
+        // Customer Unique Id is manual-only. Bulk export must never invent an ID.
+        // Use the single-client flow so the operator can enter the Customer Unique Id manually.
         $secrets = $this->filteredSecretsQuery()->with('customer')->get();
-        $prefix = siteUrlSettings('customer_id_prefix') ?: 'FCNET';
-        $last = CustomersInfo::orderBy('id', 'desc')->value('customer_unique_id');
-        $counter = $last && preg_match('/(\d+)$/', (string) $last, $m) ? (int) $m[1] : 99;
         $created = 0;
         $skipped = 0;
+        $manualRequired = 0;
 
-        DB::transaction(function () use ($secrets, $prefix, &$counter, &$created, &$skipped) {
-            foreach ($secrets as $secret) {
-                if ($secret->customer) { $skipped++; continue; }
-                do {
-                    $counter++;
-                    $uniqueId = $prefix.$counter;
-                } while (CustomersInfo::where('customer_unique_id', $uniqueId)->exists());
-                CustomersInfo::create([
-                    'customer_unique_id' => $uniqueId,
-                    'ppp_user_id' => $secret->id,
-                    'customer_name' => $secret->username,
-                    'status' => 'pending',
-                    'connection_date' => Carbon::now(),
-                ]);
-                BillingInfo::create([
-                    'customer_bill_unique_id' => $uniqueId,
-                    'billing_type' => 'prepaid',
-                    'auto_disable_date' => Carbon::now(),
-                ]);
-                OfficialInfo::create(['customer_office_unique_id' => $uniqueId]);
-                $created++;
+        foreach ($secrets as $secret) {
+            if ($secret->customer) {
+                $skipped++;
+                continue;
             }
-        });
+            $manualRequired++;
+        }
+
+        if ($manualRequired > 0) {
+            flash()->warning("{$manualRequired} client(s) require a manually entered Customer Unique Id. No automatic Customer Id was generated and no customer records were created by bulk export.");
+        } else {
+            flash()->info("No new clients required export. {$skipped} existing clients were skipped.");
+        }
         $this->dispatch('customer-list-updated');
-        flash()->success("Added {$created} new clients to Client List. {$skipped} existing clients skipped.");
     }
 
     public function exportCsv()
@@ -157,7 +173,14 @@ class MikrotikClients extends Component
 
     protected function filteredSecretsQuery()
     {
-        return PPPSecrets::query()->when($this->router, fn ($q) => $q->where('router_name', $this->router))
+        return PPPSecrets::query()
+            ->whereExists(function ($q) {
+                $q->selectRaw('1')
+                    ->from('router_lists')
+                    ->whereColumn('router_lists.router_name', 'p_p_p_secrets.router_name')
+                    ->where('router_lists.action', 'connected');
+            })
+            ->when($this->router, fn ($q) => $q->where('router_name', $this->router))
             ->when($this->protocol, fn ($q) => $q->whereRaw('upper(service) = ?', [strtoupper($this->protocol)]))
             ->when($this->profile, fn ($q) => $q->where('profile', $this->profile))
             ->when($this->userType === 'Unique', fn ($q) => $q->where(function ($q) {

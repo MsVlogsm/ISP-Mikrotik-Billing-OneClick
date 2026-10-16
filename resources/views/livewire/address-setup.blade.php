@@ -20,11 +20,14 @@
                             <div class="mb-3">
                                 <x-mikrotik.form-group
                                     column="col-12"
-                                    label="{{ __('Label Name') }}"
+                                    label="{{ __('Address Field') }}"
+                                    type="dropdownKey"
                                     name="label"
-                                    type="text"
-                                    placeholder="{{ __('Enter label name (eg. Area, Road)') }}"
+                                    placeholder="{{ __('Select Address Field') }}"
+                                    :options="collect($standardAddressLabels)->mapWithKeys(fn($item) => [$item => __($item)])->toArray()"
+                                    wChange="selectStandardAddressLabel($event.target.value)"
                                 />
+                                <div class="form-text">{{ __('Select a standard Customer Address field from the dropdown.') }}</div>
                             </div>
 
                             <div class="mb-3 bg-light p-3 rounded-3 border">

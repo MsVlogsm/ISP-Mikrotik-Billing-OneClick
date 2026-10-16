@@ -1,560 +1,185 @@
-<div class="zoom-in">
-    <x-slot name="header">
-        <h2 class="h4 font-weight-bold">
-            {{ __('Edit Customer') }}
-        </h2>
-    </x-slot>
-
-    <div x-data="{ isEditing: null, tempValue: {} }" class="row g-2">
-        <div class="col-md-6">
-            <!-- personel Information Section -->
-            <div class="col-md-12">
-                <x-mikrotik.section-form>
-                    <x-slot name="title">{{ __('Customer Information') }}</x-slot>
-                    <x-slot name="aside">
-                        <div class="col-12">
-                            <table class="table table-sm text-capitalize">
-                                @foreach ($fields['customer'] as $field => $value)
-                                    <tr>
-                                        <th>{{ __(ucwords(str_replace('_', ' ', $field))) }}:</th>
-                                        <td>
-                                            @if ($field === 'customer_unique_id' || $field === 'created_at' || $field === 'updated_at')
-                                                <span>
-                                                    {!! !empty($fields['customer'][$field]) ? $fields['customer'][$field] : '<span class="text-danger">' . __('Empty') . '</span>' !!}
-                                                </span>
-                                            @elseif ($field === 'photo_url')
-                                                @if ($photo_url)
-                                                    <div class="mt-3">
-                                                        <label>{{ __('Photo Preview:') }}</label>
-                                                        <img src="{{ $photo_url->temporaryUrl() }}" class="img-thumbnail" alt="Image Preview" style="max-width: 200px; max-height: 200px;"><button type="button" class="btn btn-white btn-sm text-danger mx-2 fs-4" wire:click="removePhoto"><i class="bi bi-x-circle-fill"></i></button>
-                                                    </div>
-                                                @elseif ($fields['customer'][$field])
-                                                    <div class="mt-3">
-                                                        <label>{{ __('Photo Preview:') }}</label>
-                                                        <img src="{{ asset($fields['customer'][$field]) }}" class="img-thumbnail" alt="Image Preview" style="max-width: 200px; max-height: 200px;"><button type="button" class="btn btn-white btn-sm text-danger mx-2 fs-4" wire:click="deletePhoto"><i class="bi bi-x-circle-fill"></i></button>
-                                                    </div>
-                                                @endif
-                                                <form wire:submit.prevent="savePhoto">
-                                                    <input type="file" name="photo_url" id="photo_url" wire:model='photo_url'>
-                                                    <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-upload"></i> {{ __('Save') }}</button>
-                                                </form>
-                                            @else
-                                                <span x-show="isEditing !== '{{ $field }}'"
-                                                    @click="isEditing = '{{ $field }}';
-                                                    tempValue['{{ $field }}'] = @js( $fields['customer'][$field] ?? '' );
-                                                    $wire.startEditing('{{ $field }}');"
-                                                    style="cursor: pointer; text-decoration: underline dotted;"
-                                                    class="link-success">
-                                                    {!! !empty($fields['customer'][$field]) ? $fields['customer'][$field] : '<span class="text-danger">' . __('Empty') . '</span>' !!}
-                                                </span>
-                                            @endif
-
-                                            <div x-show="isEditing === '{{ $field }}'"
-                                                @click.away="isEditing = null;
-                                                tempValue['{{ $field }}'] = '{{ $fields['customer'][$field] ?? '' }}';
-                                                $wire.cancelEditing('{{ $field }}')"
-                                                style="display: none;" class="input-group mt-2">
-
-                                                @if ($field === 'status')
-                                                    <select x-model="tempValue['{{ $field }}']" class="form-control form-control-sm h-50">
-                                                        <option value="">{{ __('Select Status') }}</option>
-                                                        <option value="active">{{ __('Active') }}</option>
-                                                        <option value="inactive">{{ __('Inactive') }}</option>
-                                                        <option value="pending">{{ __('Pending') }}</option>
-                                                    </select>
-                                                @elseif ($field === 'mobile' || $field === 'alternative_mobile')
-                                                    <div wire:ignore class="w-100">
-                                                        <input type="text" x-model="tempValue['{{ $field }}']"
-                                                            class="form-control form-control-sm h-50 w-100"
-                                                            x-data="intlTelInput()"
-                                                            placeholder="Edit {{ ucwords(str_replace('_', ' ', $field)) }}" autofocus />
-                                                    </div>
-                                                @else
-                                                    <input type="text" x-model="tempValue['{{ $field }}']"
-                                                        class="form-control form-control-sm h-50"
-                                                        placeholder="{{ __('Edit') }} {{ __(ucwords(str_replace('_', ' ', $field))) }}" autofocus />
-                                                @endif
-
-                                                <button @click="$wire.updateCustomer('{{ $field }}', tempValue['{{ $field }}']);
-                                                        isEditing = null"
-                                                        class="btn btn-white text-success h-50"><i class="bi bi-check2-circle"></i></button>
-
-                                                <button @click="isEditing = null;
-                                                        tempValue['{{ $field }}'] = @js(  $fields['customer'][$field] ?? '' );
-                                                        $wire.cancelEditing('{{ $field }}')"
-                                                        class="btn btn-white h-50 text-danger "><i class="bi bi-x-circle"></i></button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                @endforeach
-                            </table>
-                        </div>
-                    </x-slot>
-                </x-mikrotik.section-form>
-            </div>
-            <!-- Address Information Section -->
-            <div class="col-md-12 pt-2">
-                <x-mikrotik.section-form>
-                    <x-slot name="title">{{ __('Address Information') }}</x-slot>
-                    <x-slot name="aside">
-                        <div class="col-12">
-                            <table class="table table-sm text-capitalize">
-                                @foreach ($fields['customerAddress'] as $field => $value)
-                                    <tr>
-                                        <th>{{ __(ucwords(str_replace('_', ' ', $field))) }}:</th>
-                                        <td>
-                                            <span x-show="isEditing !== 'customerAddress.{{ $field }}'"
-                                                @click="isEditing = 'customerAddress.{{ $field }}';
-                                                tempValue['customerAddress.{{ $field }}'] = @js( $fields['customerAddress'][$field] ?? '' );
-                                                $wire.startEditing('customerAddress.{{ $field }}');"
-                                                style="cursor: pointer; text-decoration: underline dotted;"
-                                                class="link-success">
-                                                {!! !empty($fields['customerAddress'][$field]) ? $fields['customerAddress'][$field] : '<span class="text-danger">' . __('Empty') . '</span>' !!}
-                                            </span>
-                                            <div x-show="isEditing === 'customerAddress.{{ $field }}'"
-                                                @click.away="isEditing = null;
-                                                tempValue['customerAddress.{{ $field }}'] = @js( $fields['customerAddress'][$field] ?? '' );
-                                                $wire.cancelEditing('customerAddress.{{ $field }}')"
-                                                style="display: none;" class="input-group mt-2">
-
-                                                <!-- Render input type based on $addressField input_type -->
-                                                @php
-                                                    $fieldType = $addressFields->firstWhere('label', $field)->input_type ?? 'text';
-                                                @endphp
-
-                                                @if($fieldType === 'dropdown')
-                                                    <select x-model="tempValue['customerAddress.{{ $field }}']"
-                                                        class="form-control form-control-sm h-50">
-                                                        <option value="">{{ __('Select') }} {{ __(ucwords(str_replace('_', ' ', $field))) }}</option>
-                                                        @foreach (json_decode($addressFields->firstWhere('label', $field)->dropdown_list) as $option)
-                                                            <option value="{{ $option }}">{{ $option }}</option>
-                                                        @endforeach
-                                                    </select>
-                                                @else
-                                                    <input type="text" x-model="tempValue['customerAddress.{{ $field }}']"
-                                                        class="form-control form-control-sm h-50"
-                                                        placeholder="{{ __('Edit') }} {{ __(ucwords(str_replace('_', ' ', $field))) }}" autofocus />
-                                                @endif
-
-                                                <button @click="$wire.updateCustomer('customerAddress.{{ $field }}', tempValue['customerAddress.{{ $field }}']);
-                                                        isEditing = null"
-                                                        class="btn btn-white text-success h-50"><i class="bi bi-check2-circle"></i></button>
-
-                                                <button @click="isEditing = null;
-                                                        tempValue['customerAddress.{{ $field }}'] = @js( $fields['customerAddress'][$field] ?? '' );
-                                                        $wire.cancelEditing('customerAddress.{{ $field }}')"
-                                                        class="btn btn-white h-50 text-danger"><i class="bi bi-x-circle"></i></button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                @endforeach
-                            </table>
-                        </div>
-                    </x-slot>
-                </x-mikrotik.section-form>
-            </div>
-            <!-- Billing Information Section -->
-            <div class="col-md-12 pt-2">
-                <x-mikrotik.section-form>
-                    <x-slot name="title">{{ __('Billing Information') }}</x-slot>
-                    <x-slot name="aside">
-                        <div class="col-12">
-                            <table class="table table-sm text-capitalize">
-                                @foreach ($fields['billing'] as $field => $value)
-                                    <tr>
-                                        <th>{{ __(ucwords(str_replace('_', ' ', $field))) }}:</th>
-                                        <td>
-                                            <span>
-                                                {!! !empty($fields['billing'][$field]) ? $fields['billing'][$field] : '<span class="text-danger">' . __('Empty') . '</span>' !!}
-                                            </span>
-                                            {{-- <span x-show="isEditing !== 'billing.{{ $field }}'"
-                                                @click="isEditing = 'billing.{{ $field }}';
-                                                tempValue['billing.{{ $field }}'] = '{{ $fields['billing'][$field] ?? '' }}';
-                                                $wire.startEditing('billing.{{ $field }}');"
-                                                style="cursor: pointer; text-decoration: underline dotted;"
-                                                class="link-success">
-                                                {!! !empty($fields['billing'][$field]) ? $fields['billing'][$field] : '<span class="text-danger">Empty</span>' !!}
-                                            </span> --}}
-
-                                            {{-- <div x-show="isEditing === 'billing.{{ $field }}'"
-                                                @click.away="isEditing = null;
-                                                tempValue['billing.{{ $field }}'] = '{{ $fields['billing'][$field] ?? '' }}';
-                                                $wire.cancelEditing('billing.{{ $field }}')"
-                                                style="display: none;" class="input-group mt-2">
-
-                                                <input type="text" x-model="tempValue['billing.{{ $field }}']"
-                                                    class="form-control form-control-sm h-50"
-                                                    placeholder="Edit {{ ucwords(str_replace('_', ' ', $field)) }}" autofocus />
-
-                                                <button @click="$wire.updateCustomer('billing.{{ $field }}', tempValue['billing.{{ $field }}']);
-                                                        isEditing = null"
-                                                        class="btn btn-white text-success h-50"><i class="bi bi-check2-circle"></i></button>
-
-                                                <button @click="isEditing = null;
-                                                        tempValue['billing.{{ $field }}'] = '{{ $fields['billing'][$field] ?? '' }}';
-                                                        $wire.cancelEditing('billing.{{ $field }}')"
-                                                        class="btn btn-white h-50 text-danger"><i class="bi bi-x-circle"></i></button>
-                                            </div> --}}
-                                        </td>
-                                    </tr>
-                                @endforeach
-                            </table>
-                        </div>
-                    </x-slot>
-                </x-mikrotik.section-form>
-            </div>
-        </div>
-        <div class="col-md-6">
-            <!-- Server Information Section -->
-            @if(!auth()->user()->hasRole('Reseller'))
-            <div class="col-md-12">
-                <x-mikrotik.section-form>
-                    <x-slot name="title">{{ __('Server Information') }}</x-slot>
-                    <x-slot name="aside">
-                        <div class="col-12">
-                            <table class="table table-sm">
-                                @foreach ($fields['pppUser'] as $field => $value)
-                                    <tr>
-                                        @if ($field === 'ppp_user_id' && !empty($fields['pppUser']['ppp_user_id']))
-                                            <td colspan="2" class="text-end">
-                                                <button type="button" wire:click="deletePPPUser" class="btn btn-danger btn-sm"><i class="bi bi-trash"></i></button>
-                                            </td>
-                                        @elseif ($field === 'ppp_user_id' && empty($fields['pppUser']['ppp_user_id']))
-                                            <td colspan="2" class="text-start">
-                                                {{-- Server Information --}}
-                                                <form wire:submit.prevent='savePPPUser'>
-                                                    <x-mikrotik.form-input
-                                                        labelClass="col"
-                                                        groupClass="col"
-                                                        label="{{ __('Router Name') }}"
-                                                        type="dropdown"
-                                                        name="router_name"
-                                                        wChange="getInterface('router_name')"
-                                                        placeholder="{{ __('Select Any One') }}"
-                                                        :options="$routers->pluck('router_name')->toArray()"
-                                                    />
-                                                    <x-mikrotik.form-input
-                                                        labelClass="col"
-                                                        groupClass="col"
-                                                        label="{{ __('Service Type') }}"
-                                                        type="dropdownKey"
-                                                        name="service"
-                                                        placeholder="{{ __('Select Any One') }}"
-                                                        required="true"
-                                                        :options="['static' => __('Static'), 'pppoe' => __('PPPoE')]"
-                                                        wChange="getInterface('service')"
-                                                        :groupstyle="$router_name != '' ? '' : 'display: none;'"
-                                                    />
-                                                    <x-mikrotik.form-input
-                                                        labelClass="col"
-                                                        groupClass="col"
-                                                        label="{{ __('Profile') }}"
-                                                        type="dropdown"
-                                                        name="profile"
-                                                        placeholder="{{ __('Select Any One') }}"
-                                                        required="true"
-                                                        :options="$profileNames"
-                                                        :groupstyle="$service == 'pppoe' ? '' : 'display: none;'"
-                                                    />
-                                                    <x-mikrotik.form-input
-                                                        labelClass="col"
-                                                        groupClass="col"
-                                                        label="{{ __('Username/Secrets>Name') }}"
-                                                        type="text"
-                                                        name="username"
-                                                        required="true"
-                                                        placeholder="(eg. FC-40, JohnDoe)"
-                                                        :groupstyle="$service == 'pppoe' ? '' : 'display: none;'"
-                                                    />
-                                                    <x-mikrotik.form-input
-                                                        labelClass="col"
-                                                        groupClass="col"
-                                                        label="{{ __('Password') }}"
-                                                        type="text"
-                                                        name="password"
-                                                        :groupstyle="$service == 'pppoe' ? '' : 'display: none;'"
-                                                    />
-                                                    <x-mikrotik.form-input
-                                                        labelClass="col"
-                                                        groupClass="col"
-                                                        label="{{ __('PPPoE Remote IP Address (Optional)') }}"
-                                                        type="text"
-                                                        name="ppp_remote_ip"
-                                                        :groupstyle="$service == 'pppoe' ? '' : 'display: none;'"
-                                                    />
-                                                    <x-mikrotik.form-input
-                                                        labelClass="col"
-                                                        groupClass="col"
-                                                        label="{{ __('Interface Name') }}"
-                                                        type="dropdown"
-                                                        name="interface"
-                                                        placeholder="{{ __('Select Any One') }}"
-                                                        required="true"
-                                                        :options="$interfaceNames"
-                                                        :groupstyle="$service == 'static' ? '' : 'display: none;'"
-                                                    />
-                                                    <x-mikrotik.form-input
-                                                        labelClass="col"
-                                                        groupClass="col"
-                                                        label="{{ __('Simple Queues > Name') }}"
-                                                        type="text"
-                                                        name="queue_name"
-                                                        required="true"
-                                                        placeholder="(eg. FC-40, JohnDoe)"
-                                                        :groupstyle="$service == 'static' ? '' : 'display: none;'"
-                                                    />
-                                                    <x-mikrotik.form-input
-                                                        labelClass="col"
-                                                        groupClass="col"
-                                                        label="{{ __('IP Address') }}"
-                                                        type="text"
-                                                        name="ip_address"
-                                                        required="true"
-                                                        :groupstyle="($router_name && $service == 'static') || !$router_name ? '' : 'display: none;'"
-                                                    />
-                                                    <x-mikrotik.form-input
-                                                        labelClass="col"
-                                                        groupClass="col"
-                                                        label="{{ __('MAC Address') }}"
-                                                        type="text"
-                                                        name="caller_id"
-                                                        placeholder="(eg. 00:11:22:33:44:55)"
-                                                    />
-                                                    <x-mikrotik.form-input
-                                                        labelClass="col"
-                                                        groupClass="col"
-                                                        label="{{ __('Bandwidth') }}"
-                                                        type="text"
-                                                        name="bandwidth"
-                                                        placeholder="(e.g.,1K/1k, 1K/1M, 1M/1M, 10M/10M)"
-                                                        :required="$service == 'static' ? true : false"
-                                                        :groupstyle="($router_name && $service == 'static') || !$router_name ? '' : 'display: none;'"
-                                                    />
-                                                    <x-mikrotik.form-input
-                                                        labelClass="col"
-                                                        groupClass="col"
-                                                        label="{{ __('Comment') }}"
-                                                        type="text"
-                                                        name="comment"
-                                                    />
-                                                    <div class="text-end">
-                                                        <button type="submit" class="btn btn-sm btn-outline-success">{{ __('Save') }}</button>
-                                                        <button wire:click="resetPPPUser" class="btn btn-sm btn-outline-secondary">{{ __('Reset') }}</button>
-                                                    </div>
-                                                </form>
-                                            </td>
-                                        @else
-                                            <th>{{ __(ucwords(str_replace('_', ' ', $field))) }}:</th>
-                                            <td>
-                                                @if ($field === 'auto_disable')
-                                                    <span>
-                                                        <x-mikrotik.form-input
-                                                            type="checkbox"
-                                                            name="fields.pppUser.{{ $field }}"
-                                                            wChange="checkboxUpdated('fields.pppUser.{{ $field }}')"
-                                                            :value="$fields['pppUser'][$field] ?? ''"
-                                                            :checked="isset($fields['pppUser'][$field]) && $fields['pppUser'][$field] == 1"
-                                                        />
-                                                    </span>
-                                                @elseif ($field === 'router_name' || $field === 'service')
-                                                    <span>{{ $fields['pppUser'][$field] ?? '' }}</span>
-                                                @else
-                                                    <span x-show="isEditing !== 'pppUser.{{ $field }}'"
-                                                        @click="isEditing = 'pppUser.{{ $field }}';
-                                                        tempValue['pppUser.{{ $field }}'] = @js($fields['pppUser'][$field] ?? '');
-                                                        $wire.startEditing('pppUser.{{ $field }}');"
-                                                        style="cursor: pointer; text-decoration: underline dotted;"
-                                                        class="link-success">
-                                                        {!! !empty($fields['pppUser'][$field]) ? $fields['pppUser'][$field] : '<span class="text-danger">' . __('Empty') . '</span>' !!}
-                                                    </span>
-                                                @endif
- 
-                                                <div x-show="isEditing === 'pppUser.{{ $field }}'"
-                                                    @click.away="isEditing = null;
-                                                    tempValue['pppUser.{{ $field }}'] = '{{ $fields['pppUser'][$field] ?? '' }}';
-                                                    $wire.cancelEditing('pppUser.{{ $field }}')"
-                                                    style="display: none;" class="input-group mt-2">
-                                                    @if ($field === 'connection_date')
-                                                        <input type="date" x-model="tempValue['pppUser.{{ $field }}']"
-                                                        class="form-control form-control-sm h-50"
-                                                        placeholder="Edit {{ ucwords(str_replace('_', ' ', $field)) }}" autofocus />
-                                                    @elseif ($field === 'package_name')
-                                                        <select x-model="tempValue['pppUser.{{ $field }}']"
-                                                            class="form-control form-control-sm h-50">
-                                                            <option value="">{{ __('Select') }} {{ ucwords(str_replace('_', ' ', $field)) }}</option>
-                                                            @foreach ($packageLists as $packageList)
-                                                                <option value="{{ $packageList }}">{{ $packageList }}</option>
-                                                            @endforeach
-                                                        </select>
-                                                    @elseif ($field === 'profile')
-                                                        <select x-model="tempValue['pppUser.{{ $field }}']"
-                                                            class="form-control form-control-sm h-50">
-                                                            <option value="">{{ __('Select') }} {{ ucwords(str_replace('_', ' ', $field)) }}</option>
-                                                            @foreach ($interfaceNames as $interfaceName)
-                                                                <option value="{{ $interfaceName }}">{{ $interfaceName }}</option>
-                                                            @endforeach
-                                                        </select>
-                                                    @elseif ($field === 'auto_disable_date')
-                                                        <input type="date" x-model="tempValue['pppUser.{{ $field }}']"
-                                                        class="form-control form-control-sm h-50"
-                                                        placeholder="{{ __('Edit') }} {{ __(ucwords(str_replace('_', ' ', $field))) }}" autofocus />
-                                                    @elseif ($field === 'auto_disable_month')
-                                                        <select x-model="tempValue['pppUser.{{ $field }}']"
-                                                            class="form-control form-control-sm h-50">
-                                                            <option value="">{{ __('Select') }} {{ __(ucwords(str_replace('_', ' ', $field))) }}</option>
-                                                            <option value="0">{{ __('Current Month') }}</option>
-                                                            <option value="1">{{ __('1st Month') }}</option>
-                                                            <option value="2">{{ __('2nd Month') }}</option>
-                                                            <option value="3">{{ __('3rd Month') }}</option>
-                                                            <option value="4">{{ __('4th Month') }}</option>
-                                                            <option value="5">{{ __('5th Month') }}</option>
-                                                            <option value="6">{{ __('6th Month') }}</option>
-                                                            <option value="7">{{ __('7th Month') }}</option>
-                                                            <option value="8">{{ __('8th Month') }}</option>
-                                                            <option value="9">{{ __('9th Month') }}</option>
-                                                            <option value="10">{{ __('10th Month') }}</option>
-                                                            <option value="11">{{ __('11th Month') }}</option>
-                                                            <option value="12">{{ __('12th Month') }}</option>
-                                                        </select>
-                                                    @else
-                                                        <input type="text" x-model="tempValue['pppUser.{{ $field }}']"
-                                                        class="form-control form-control-sm h-50"
-                                                        placeholder="{{ __('Edit') }} {{ __(ucwords(str_replace('_', ' ', $field))) }}" autofocus />
-                                                    @endif
- 
-                                                    <button @click="$wire.updateCustomer('pppUser.{{ $field }}', tempValue['pppUser.{{ $field }}']);
-                                                            isEditing = null"
-                                                            class="btn btn-white text-success h-50"><i class="bi bi-check2-circle"></i></button>
- 
-                                                    <button @click="isEditing = null;
-                                                            tempValue['pppUser.{{ $field }}'] = @js(  $fields['pppUser'][$field] ?? '' );
-                                                            $wire.cancelEditing('pppUser.{{ $field }}')"
-                                                            class="btn btn-white h-50 text-danger"><i class="bi bi-x-circle"></i></button>
-                                                </div>
-                                            </td>
-                                        @endif
-                                    </tr>
-                                @endforeach
-                            </table>
-                        </div>
-                    </x-slot>
-                </x-mikrotik.section-form>
-            </div>
-            @endif
-            <!-- official Information Section -->
-            <div class="col-md-12 pt-2">
-                <x-mikrotik.section-form>
-                    <x-slot name="title">{{ __('Official Information') }}</x-slot>
-                    <x-slot name="aside">
-                        <div class="col-12">
-                            <table class="table table-sm text-capitalize">
-                                @foreach ($fields['official'] as $field => $value)
-                                    <tr>
-                                        <th>{{ $field === 'reseller_id' ? __('Shifted to Reseller') : __(ucwords(str_replace('_', ' ', $field))) }}:</th>
-                                        <td>
- 
-                                            @if ($field === 'bill_sms' || $field === 'continue_bill' || $field === 'bill_create')
-                                                <span>
-                                                    <x-mikrotik.form-input
-                                                        type="checkbox"
-                                                        name="fields.official.{{ $field }}"
-                                                        wChange="checkboxUpdated('fields.official.{{ $field }}')"
-                                                        :value="$fields['official'][$field] ?? ''"
-                                                        :checked="isset($fields['official'][$field]) && $fields['official'][$field] == 1"
-                                                    />
-                                                </span>
-                                            @else
-                                                <span x-show="isEditing !== 'official.{{ $field }}'"
-                                                    @click="isEditing = 'official.{{ $field }}';
-                                                    tempValue['official.{{ $field }}'] = @js( $field === 'connected_by' ? ($userLists->where('name', $fields['official'][$field])->first()->id ?? '') : ($field === 'reseller_id' ? ($resellersList->where('company', $fields['official'][$field])->first()->id ?? $resellersList->where('user.name', $fields['official'][$field])->first()->id ?? '') : ($fields['official'][$field] ?? '')) );
-                                                    $wire.startEditing('official.{{ $field }}');"
-                                                    style="cursor: pointer; text-decoration: underline dotted;"
-                                                    class="link-success">
-                                                    {!! !empty($fields['official'][$field]) ? $fields['official'][$field] : '<span class="text-danger">' . __('Empty') . '</span>' !!}
-                                                </span>
-                                            @endif
-
-                                            <div x-show="isEditing === 'official.{{ $field }}'"
-                                                @click.away="isEditing = null;
-                                                tempValue['official.{{ $field }}'] = '{{ $fields['official'][$field] ?? '' }}';
-                                                $wire.cancelEditing('official.{{ $field }}')"
-                                                style="display: none;" class="input-group mt-2">
-
-                                                @if ($field === 'status' || $field === 'client_type' || $field === 'billing_type' || $field === 'connection_type' || $field === 'connectivity_type' || $field === 'distribution_location' || $field === 'connected_by' || $field === 'reseller_id')
-                                                    <select x-model="tempValue['official.{{ $field }}']"
-                                                            class="form-control form-control-sm h-50">
-                                                        <option value="">{{ $field === 'reseller_id' ? __('No Reseller (Admin)') : (__('Select') . ' ' . __(ucwords(str_replace('_', ' ', $field)))) }}</option>
-                                                        @if($field === 'status')
-                                                            <option value="active">{{ __('Active') }}</option>
-                                                            <option value="disable">{{ __('Temporary Disable') }}</option>
-                                                            @if(!auth()->user()->hasRole('Reseller'))
-                                                                <option value="free">{{ __('Free') }}</option>
-                                                            @endif
-                                                        @elseif ($field === 'client_type')
-                                                            <option value="home">{{ __('Home') }}</option>
-                                                            <option value="commercial">{{ __('Commercial') }}</option>
-                                                            <option value="corporate">{{ __('Corporate') }}</option>
-                                                            <option value="business">{{ __('Business') }}</option>
-                                                        @elseif ($field === 'billing_type')
-                                                            <option value="prepaid">{{ __('Prepaid') }}</option>
-                                                            <option value="postpaid">{{ __('Postpaid') }}</option>
-                                                        @elseif ($field === 'connection_type')
-                                                            <option value="fiber">{{ __('Fiber') }}</option>
-                                                            <option value="wired">{{ __('Wired') }}</option>
-                                                            <option value="wireless">{{ __('Wireless') }}</option>
-                                                        @elseif ($field === 'connectivity_type')
-                                                            <option value="shared">{{ __('Shared') }}</option>
-                                                            <option value="dedicated">{{ __('Dedicated') }}</option>
-                                                        @elseif ($field === 'distribution_location')
-                                                            <option value="dc">{{ __('DC') }}</option>
-                                                            <option value="noc">{{ __('NOC') }}</option>
-                                                            <option value="pop">{{ __('POP') }}</option>
-                                                        @elseif ($field === 'connected_by')
-                                                            @foreach ($userLists as $userList)
-                                                                <option value="{{ $userList->id }}">{{ $userList->name }}</option>
-                                                            @endforeach
-                                                        @elseif ($field === 'reseller_id')
-                                                            @foreach ($resellersList as $rItem)
-                                                                <option value="{{ $rItem->id }}">
-                                                                    {{ $rItem->company ? $rItem->company . ' (' . $rItem->user->name . ')' : $rItem->user->name }}
-                                                                </option>
-                                                            @endforeach
-                                                        @endif
-                                                    </select>
-                                                @else
-                                                    <input type="text" x-model="tempValue['official.{{ $field }}']"
-                                                        class="form-control form-control-sm h-50"
-                                                        placeholder="{{ __('Edit') }} {{ __(ucwords(str_replace('_', ' ', $field))) }}" autofocus />
-                                                @endif
-                                                <button @click="$wire.updateCustomer('official.{{ $field }}', tempValue['official.{{ $field }}']);
-                                                        isEditing = null"
-                                                        class="btn btn-white text-success h-50"><i class="bi bi-check2-circle"></i></button>
-
-                                                <button @click="isEditing = null;
-                                                        tempValue['official.{{ $field }}'] = @js(  $fields['official'][$field] ?? '' );
-                                                        $wire.cancelEditing('official.{{ $field }}')"
-                                                        class="btn btn-white h-50 text-danger"><i class="bi bi-x-circle"></i></button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                @endforeach
-                            </table>
-                        </div>
-                    </x-slot>
-                </x-mikrotik.section-form>
-            </div>
-        </div>
-    </div>
+<div class="p-1">
+<x-slot name="header"><h2 class="h4 fw-bold">{{ __('Edit Customer') }}</h2></x-slot>
+<form wire:submit.prevent="saveEditForm">
+<link rel="stylesheet" href="{{ asset('vendor/leaflet/leaflet.css') }}">
+<script src="{{ asset('vendor/leaflet/leaflet.js') }}"></script>
+<div class="mb-3">
+<ul class="nav nav-tabs" id="edit-customer-tabs-{{ md5((string)$customerId) }}" role="tablist">
+<li class="nav-item" role="presentation"><button class="nav-link active" type="button" data-edit-tab="details-{{ md5((string)$customerId) }}">Customer Details</button></li>
+<li class="nav-item" role="presentation"><button class="nav-link" type="button" data-edit-tab="network-{{ md5((string)$customerId) }}"><i class="bi bi-geo-alt me-1"></i>Network Location</button></li>
+</ul>
 </div>
-
-@push('scripts')
-    <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            // remove invalid feedback and error
-            $('input, textarea, select').on('focus', function () {
-                $(this).removeClass('is-invalid'); // remove invalid class
-                $(this).nextAll('.invalid-feedback').remove(); // remove invalid feedback
-            });
+<div class="edit-customer-tab-content" style="min-height:120px;">
+<div class="edit-customer-tab-pane" id="details-{{ md5((string)$customerId) }}">
+<div class="row g-3">
+<div class="col-12">
+<x-mikrotik.section-form :class="'row'">
+<x-slot name="title"><span class="text-success fw-bold"><i class="bi bi-person me-2"></i>Customer Information</span></x-slot>
+<x-slot name="aside">
+<x-mikrotik.form-group label="Customer Name" name="fields.customer.customer_name" type="text" required="true"/>
+<x-mikrotik.form-group label="Customer Unique Id" name="fields.customer.customer_unique_id" type="text" readonly="true"/>
+<x-mikrotik.form-group label="Email Address" name="fields.customer.email" type="text"/>
+<x-mikrotik.form-group label="Identification No" name="fields.customer.identification_no" type="text"/>
+<x-mikrotik.form-group label="Mobile Number" name="fields.customer.mobile" type="text"/>
+<x-mikrotik.form-group label="Alternate Mobile Number" name="fields.customer.alternative_mobile" type="text"/>
+<x-mikrotik.form-group label="Profession Details" name="fields.customer.profession" type="text"/>
+</x-slot>
+<x-section-border/>
+</x-mikrotik.section-form>
+</div>
+<div class="col-12">
+<x-mikrotik.section-form :class="'row'">
+<x-slot name="title"><span class="text-success fw-bold"><i class="bi bi-geo-alt me-2"></i>Customer Address</span></x-slot>
+<x-slot name="aside">
+@foreach($addressFields as $addressField)
+<x-mikrotik.form-group label="{{ __($addressField['label']) }}" type="{{ $addressField['input_type'] }}" name="fields.customerAddress.{{ $addressField['label'] }}" :options="json_decode($addressField['dropdown_list'] ?: '[]')" required="{{ $addressField['required'] ? '*' : '' }}"/>
+@endforeach
+</x-slot>
+<x-section-border/>
+</x-mikrotik.section-form>
+</div>
+@if(!auth()->user()->hasRole('Reseller'))
+<div class="col-12">
+<x-mikrotik.section-form :class="'row'">
+<x-slot name="title"><span class="text-success fw-bold"><i class="bi bi-hdd-network me-2"></i>Service Access</span></x-slot>
+<x-slot name="aside">
+<x-mikrotik.form-group label="Connection Date" name="fields.pppUser.connection_date" type="date"/>
+<x-mikrotik.form-group label="Router Name" name="fields.pppUser.router_name" type="dropdown" :options="$routers->pluck('router_name')->toArray()"/>
+<x-mikrotik.form-group label="Service Type" name="fields.pppUser.service" type="dropdownKey" :options="['static'=>'Static','pppoe'=>'PPPoE']" required="true"/>
+<x-mikrotik.form-group label="Profile" name="fields.pppUser.profile" type="text"/>
+<x-mikrotik.form-group label="PPPoE User ID" name="fields.pppUser.username" type="text" required="true"/>
+<x-mikrotik.form-group label="PPPoE Password" name="fields.pppUser.password" type="text"/>
+<x-mikrotik.form-group label="PPPoE Remote IP / Static IP" name="fields.pppUser.ppp_remote_ip" type="text"/>
+<x-mikrotik.form-group label="Interface Name" name="fields.pppUser.interface" type="text"/>
+<x-mikrotik.form-group label="IP Address" name="fields.pppUser.ip_address" type="text"/>
+<x-mikrotik.form-group label="Subnet / Prefix" name="fields.pppUser.subnet_prefix" type="text"/>
+<x-mikrotik.form-group label="Gateway" name="fields.pppUser.gateway" type="text"/>
+<x-mikrotik.form-group label="MAC Address" name="fields.pppUser.caller_id" type="text"/>
+<x-mikrotik.form-group label="Bandwidth" name="fields.pppUser.bandwidth" type="text"/>
+<x-mikrotik.form-group label="Comments / Remarks / Special Note" name="fields.pppUser.comment" type="text"/>
+</x-slot>
+<div class="row g-3">
+<div class="col-md-4"><x-mikrotik.form-group label="Auto Temporary Disable" name="fields.pppUser.auto_disable" type="checkbox"/></div>
+<div class="col-md-4"><x-mikrotik.form-group label="Expire Date" name="fields.pppUser.auto_disable_date" type="date"/></div>
+<div class="col-md-4"><x-mikrotik.form-group label="Auto Temporary Month" name="fields.pppUser.auto_disable_month" type="text"/></div>
+</div>
+<x-section-border/>
+</x-mikrotik.section-form>
+</div>
+@endif
+<div class="col-12">
+<x-mikrotik.section-form :class="'row'">
+<x-slot name="title"><span class="text-success fw-bold"><i class="bi bi-cash-stack me-2"></i>Billing Information</span></x-slot>
+<x-slot name="aside">
+<x-mikrotik.form-group
+    label="Package Plan"
+    name="fields.pppUser.package_name"
+    type="dropdown"
+    placeholder="Select Package Plan"
+    :options="$packageLists?->unique()->values()->toArray() ?? []"
+    wChange="loadPackagePrice"
+/>
+<x-mikrotik.form-group label="Monthly Charge" name="fields.billing.monthly_rent" type="number" required="true"/>
+<x-mikrotik.form-group label="Due Amount" name="fields.billing.due_amount" type="number"/>
+<x-mikrotik.form-group label="Additional Charge" name="fields.billing.additional_charge" type="number"/>
+<x-mikrotik.form-group label="Discount" name="fields.billing.discount" type="number"/>
+<x-mikrotik.form-group label="Advance" name="fields.billing.advance" type="number"/>
+<x-mikrotik.form-group label="VAT (%)" name="fields.billing.vat" type="number"/>
+<x-mikrotik.form-group label="Total Amount" name="fields.billing.total_amount" type="number"/>
+</x-slot>
+<x-section-border/>
+</x-mikrotik.section-form>
+</div>
+<div class="col-12">
+<x-mikrotik.section-form :class="'row'">
+<x-slot name="title"><span class="text-success fw-bold"><i class="bi bi-briefcase me-2"></i>Office Information</span></x-slot>
+<x-slot name="aside">
+<x-mikrotik.form-group label="Billing Type" type="radio" name="fields.official.billing_type" :options="['prepaid'=>'Prepaid','postpaid'=>'Postpaid']"/>
+<x-mikrotik.form-group label="Type of Connection" type="radio" name="fields.official.connection_type" :options="['fiber'=>'Fiber','wired'=>'Wired','wireless'=>'Wireless']"/>
+<x-mikrotik.form-group label="Type of Connectivity" type="radio" name="fields.official.connectivity_type" :options="['shared'=>'Shared','dedicated'=>'Dedicated']"/>
+<x-mikrotik.form-group label="Type of Client" type="dropdownKey" name="fields.official.client_type" :options="['home'=>'Home','commercial'=>'Commercial','Corporate'=>'Corporate','business'=>'Business']"/>
+<x-mikrotik.form-group label="Description" type="text" name="fields.official.description"/>
+<x-mikrotik.form-group label="Note" type="text" name="fields.official.note"/>
+<x-mikrotik.form-group label="Connected By" type="dropdownKey" name="fields.official.connected_by" :options="$userLists->pluck('name','id')->toArray()"/>
+<x-mikrotik.form-group label="Security Deposit" type="text" name="fields.official.security_deposit"/>
+</x-slot>
+<x-section-border/>
+</x-mikrotik.section-form>
+</div>
+</div>
+<div class="edit-customer-tab-pane d-none" id="network-{{ md5((string)$customerId) }}">
+<div class="card border-0 shadow-sm">
+<div class="card-header bg-white"><strong><i class="bi bi-geo-alt me-2"></i>Network Location</strong><small class="d-block text-muted">Set the customer's exact network location. Click on the map or enter coordinates manually.</small></div>
+<div class="card-body">
+<div class="row g-3">
+<div class="col-lg-4">
+<div class="mb-3"><label class="form-label">Latitude</label><input id="network-location-lat" type="text" class="form-control" wire:model.live="fields.customer.latitude" placeholder="e.g. 23.8103"></div>
+<div class="mb-3"><label class="form-label">Longitude</label><input id="network-location-lng" type="text" class="form-control" wire:model.live="fields.customer.longitude" placeholder="e.g. 90.4125"></div>
+<div class="alert alert-info small mb-0"><i class="bi bi-info-circle me-1"></i>Map changes update Latitude/Longitude automatically. Use <strong>Save Changes</strong> below to store the location.</div>
+</div>
+<div class="col-lg-8"><div id="customer-network-map" wire:ignore style="height:420px;border:1px solid #dee2e6;border-radius:10px;overflow:hidden;background:#f8f9fa;"></div></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="col-12 d-flex justify-content-end gap-2 mt-3">
+<button type="button" wire:click="$dispatch('close-edit-customer')" class="btn btn-outline-secondary">Cancel</button>
+<button type="submit" class="btn btn-primary"><i class="bi bi-check2-circle me-1"></i>Save Changes</button>
+</div>
+</form>
+@script
+<script>
+(function () {
+    const root = document.currentScript?.closest('[wire\\:id]') || document;
+    const tabButtons = root.querySelectorAll('[data-edit-tab]');
+    const tabPanes = root.querySelectorAll('.edit-customer-tab-pane');
+    tabButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+            tabButtons.forEach((b) => b.classList.remove('active'));
+            tabPanes.forEach((p) => p.classList.add('d-none'));
+            button.classList.add('active');
+            const target = root.querySelector('#' + CSS.escape(button.dataset.editTab));
+            if (target) target.classList.remove('d-none');
+            if (button.dataset.editTab?.startsWith('network-')) {
+                setTimeout(() => window.__xlinkCustomerMap?.invalidateSize(), 80);
+            }
         });
-    </script>
-@endpush
+    });
+
+    const mapEl = root.querySelector('#customer-network-map');
+    const latEl = root.querySelector('#network-location-lat');
+    const lngEl = root.querySelector('#network-location-lng');
+    if (!mapEl || !latEl || !lngEl || typeof L === 'undefined' || mapEl.dataset.initialized === '1') return;
+    mapEl.dataset.initialized = '1';
+    const initialLat = Number.parseFloat(latEl.value);
+    const initialLng = Number.parseFloat(lngEl.value);
+    const hasCoords = Number.isFinite(initialLat) && Number.isFinite(initialLng);
+    const center = hasCoords ? [initialLat, initialLng] : [23.8103, 90.4125];
+    const map = L.map(mapEl).setView(center, hasCoords ? 16 : 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+    let marker = hasCoords ? L.marker(center).addTo(map) : null;
+    window.__xlinkCustomerMap = map;
+
+    const syncMarker = () => {
+        const lat = Number.parseFloat(latEl.value);
+        const lng = Number.parseFloat(lngEl.value);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+        const point = [lat, lng];
+        if (!marker) marker = L.marker(point).addTo(map);
+        else marker.setLatLng(point);
+        map.setView(point, Math.max(map.getZoom(), 16));
+    };
+    map.on('click', (event) => {
+        latEl.value = event.latlng.lat.toFixed(7);
+        lngEl.value = event.latlng.lng.toFixed(7);
+        latEl.dispatchEvent(new Event('input', { bubbles: true }));
+        lngEl.dispatchEvent(new Event('input', { bubbles: true }));
+        syncMarker();
+    });
+    latEl.addEventListener('input', syncMarker);
+    lngEl.addEventListener('input', syncMarker);
+})();
+</script>
+@endscript
+</div>

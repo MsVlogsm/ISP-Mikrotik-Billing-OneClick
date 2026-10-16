@@ -191,7 +191,12 @@
                                     <div>{{ $reseller->user->email ?? 'N/A' }}</div>
                                     <small class="text-muted">{{ $reseller->phone ?? 'N/A' }}</small>
                                 </td>
-                                <td>{{ $reseller->company ?? 'N/A' }}</td>
+                                <td>
+                                    {{ $reseller->company ?? 'N/A' }}
+                                    <span class="badge text-bg-{{ ($reseller->panel_type ?? 'standard') === 'mac' ? 'info' : 'secondary' }}">
+                                        {{ ($reseller->panel_type ?? 'standard') === 'mac' ? __('MAC Reseller') : __('Standard') }}
+                                    </span>
+                                </td>
                                 <td class="text-center"><span class="badge bg-success-subtle text-success border border-success px-2 py-1">{{ $reseller->commission_percentage }}%</span></td>
                                 <td class="text-end text-muted">৳{{ number_format($reseller->totalCollections(), 2) }}</td>
                                 <td class="text-end fw-bold text-success">৳{{ number_format($reseller->totalProfit(), 2) }}</td>

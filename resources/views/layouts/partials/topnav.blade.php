@@ -4,7 +4,7 @@
             <span class="toggle-line"></span>
         </span>
     </button>
-    <a class="navbar-brand me-1 me-sm-3" href="{{ url('/') }}">
+    <a class="navbar-brand me-1 me-sm-3" href="{{ route('dashboard') }}">
         <div class="d-flex align-items-center">
             @if (siteUrlSettings('site_logo'))
                 <img class="me-2" style="width: 190px; height: 53px;" src="{{ site_image(siteUrlSettings('site_logo')) }}" alt="logo"/>
@@ -30,7 +30,7 @@
             <span class="toggle-line"></span>
         </span>
     </button>
-    <a class="navbar-brand me-1 me-sm-3" href="{{ url('/') }}">
+    <a class="navbar-brand me-1 me-sm-3" href="{{ route('dashboard') }}">
         <div class="d-flex align-items-center">
             @if (siteUrlSettings('site_logo'))
                 <img class="me-2" style="width: 190px; height: 53px;" src="{{ site_image(siteUrlSettings('site_logo')) }}" alt="logo"/>
