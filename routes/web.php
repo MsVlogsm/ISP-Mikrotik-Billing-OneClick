@@ -163,6 +163,8 @@ Route::middleware([
         Route::get('/due-call-reminders', [\App\Http\Controllers\DueCallReminderController::class, 'index'])->name('due-call-reminders.index');
         Route::post('/due-call-reminders/settings', [\App\Http\Controllers\DueCallReminderController::class, 'save'])->name('due-call-reminders.save');
         Route::post('/due-call-reminders/run', [\App\Http\Controllers\DueCallReminderController::class, 'run'])->name('due-call-reminders.run');
+        Route::post('/due-call-reminders/test-connection', [\App\Http\Controllers\DueCallReminderController::class, 'testConnection'])->name('due-call-reminders.test-connection');
+        Route::post('/due-call-reminders/test-call', [\App\Http\Controllers\DueCallReminderController::class, 'testCall'])->name('due-call-reminders.test-call');
 
         // AI Engineer
         Route::get('/ai-engineer', [\App\Http\Controllers\AiEngineerController::class, 'index'])->name('ai-engineer');
