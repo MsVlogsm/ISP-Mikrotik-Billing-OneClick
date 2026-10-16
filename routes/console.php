@@ -64,3 +64,6 @@ Schedule::command('app:check-network-inventory')->everyMinute()->withoutOverlapp
 Schedule::command('app:reconcile-mikrotik-pending-actions')->everyMinute()->withoutOverlapping();
 Schedule::command('olt:sync-onu-mappings')->everyFiveMinutes()->withoutOverlapping()->onOneServer();
 Schedule::command('app:capture-customer-connection-snapshots')->everyFiveMinutes()->withoutOverlapping();
+
+// Daily due-customer voice reminders; no requests are sent unless configured and enabled.
+Schedule::command('billing:due-call-reminders')->dailyAt('11:00')->timezone($timezone)->withoutOverlapping();

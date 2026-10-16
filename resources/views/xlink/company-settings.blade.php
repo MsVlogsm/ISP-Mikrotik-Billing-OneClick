@@ -5,6 +5,7 @@
 ['Area & Zone Setup','Manage service address dropdowns and location values.','address-setup','bi-geo-alt'],
 ['Service Configuration','Manage connection types, protocols, customer types, billing statuses and bandwidth types.','company-settings.service-configuration','bi-sliders'],
 ['Billing & Operation','Configure the active disconnect checks, expired profile, invoice prefix and currency.','company-settings.billing-operations','bi-receipt'],
+['Due Customer Auto Call','Schedule voice-call reminders for customers with outstanding bills and review call history.','due-call-reminders.index','bi-telephone-outbound'],
 ['Company Setup','Company identity, branding and invoice/document settings.','site-settings','bi-building'],
 ['Email Settings','SMTP credentials, sender identity, reply-to and a test email.','company-settings.email','bi-envelope-at'],
 ['Payment Gateway','Existing mobile banking and payment gateway configuration.','mobile-banking.settings','bi-credit-card'],
