@@ -51,7 +51,7 @@
         "jszip": "^3.10.1",
         "moment": "^2.30.1",
         "moment-timezone": "^0.5.48",
-        "pdfmake": "^0.2.23",
+        "pdfmake": "^0.3.11",
         "print-js": "^1.6.0",
         "summernote": "^0.9.1",
         "sweetalert2": "^11.6.13",
