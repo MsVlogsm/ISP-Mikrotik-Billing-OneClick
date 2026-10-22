@@ -39,7 +39,7 @@
         "xlink/sms-bridge": "1.0.0"
     },
     "require-dev": {
-        "barryvdh/laravel-debugbar": "^3.15",
+        "barryvdh/laravel-debugbar": "^4.4",
         "fakerphp/faker": "^1.24",
         "laravel-lang/common": "^6.8",
         "laravel/pail": "^1.2",
