@@ -76,7 +76,7 @@
     name="fields.pppUser.package_name"
     type="dropdown"
     placeholder="Select Package Plan"
-    :options="$packageLists?->unique()->values()->toArray() ?? []"
+    :options="array_merge(['Free Customer'], $packageLists?->unique()->values()->toArray() ?? [])"
     wChange="loadPackagePrice"
 />
 <x-mikrotik.form-group label="Monthly Charge" name="fields.billing.monthly_rent" type="number" required="true"/>

@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Http\Controllers\MikrotikController;
 use App\Models\CustomersInfo;
+use App\Models\NetworkEvent;
 use App\Models\RouterList;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -58,6 +59,81 @@ class CaptureCustomerConnectionSnapshots extends Command
                         'created_at'=>now(),
                         'updated_at'=>now(),
                     ]);
+
+                    // Only alert on a confirmed ONLINE -> OFFLINE transition. The router
+                    // itself was probed above, so an unreachable router cannot mass-alert
+                    // all of its customers as individually down.
+                    $fingerprint = 'customer-down:'.(string) $customer->customer_unique_id;
+                    $openAlert = NetworkEvent::where('fingerprint', $fingerprint)
+                        ->whereIn('status', ['open', 'acknowledged'])
+                        ->latest('id')->first();
+
+                    if ($state === 'offline') {
+                        if ($latest && $latest->state === 'online' && ! $openAlert) {
+                            NetworkEvent::create([
+                                'source_type' => 'customer-monitoring',
+                                'event_type' => 'customer_down',
+                                'severity' => 'critical',
+                                'title' => 'Customer offline: '.($customer->customer_name ?: $customer->customer_unique_id),
+                                'message' => 'Customer ID: '.$customer->customer_unique_id
+                                    .'\nName: '.($customer->customer_name ?: 'N/A')
+                                    .'\nPPPoE: '.$username
+                                    .'\nRouter: '.$router->router_name
+                                    .'\nLast known IP: '.($session['address'] ?? $session['remote-address'] ?? 'N/A'),
+                                'status' => 'open',
+                                'fingerprint' => $fingerprint,
+                                'occurrences' => 1,
+                                'first_seen_at' => now(),
+                                'last_seen_at' => now(),
+                                'metadata' => [
+                                    'customer_unique_id' => $customer->customer_unique_id,
+                                    'customer_name' => $customer->customer_name,
+                                    'ppp_username' => $username,
+                                    'router_name' => $router->router_name,
+                                    'previous_state' => $latest->state,
+                                    'current_state' => $state,
+                                ],
+                            ]);
+                        } elseif ($openAlert) {
+                            $openAlert->increment('occurrences');
+                            $openAlert->update(['last_seen_at' => now()]);
+                        }
+                    } elseif ($state === 'online' && $openAlert) {
+                        $recoveryMessage = 'Customer is UP again.\nCustomer ID: '.$customer->customer_unique_id
+                            .'\nName: '.($customer->customer_name ?: 'N/A')
+                            .'\nPPPoE: '.$username.'\nRouter: '.$router->router_name
+                            .'\nIP: '.($session['address'] ?? $session['remote-address'] ?? 'N/A');
+                        $openAlert->update([
+                            'status' => 'resolved',
+                            'resolved_at' => now(),
+                            'resolved_by' => null,
+                            'last_seen_at' => now(),
+                            'message' => $recoveryMessage,
+                        ]);
+
+                        // Recovery is a separate event so the normal notification job
+                        // sends a Telegram message for UP as well as DOWN transitions.
+                        NetworkEvent::create([
+                            'source_type' => 'customer-monitoring',
+                            'event_type' => 'customer_up',
+                            'severity' => 'warning',
+                            'title' => 'Customer back online: '.($customer->customer_name ?: $customer->customer_unique_id),
+                            'message' => $recoveryMessage,
+                            'status' => 'open',
+                            'fingerprint' => 'customer-up:'.(string) $customer->customer_unique_id.':'.now()->timestamp,
+                            'occurrences' => 1,
+                            'first_seen_at' => now(),
+                            'last_seen_at' => now(),
+                            'metadata' => [
+                                'customer_unique_id' => $customer->customer_unique_id,
+                                'customer_name' => $customer->customer_name,
+                                'ppp_username' => $username,
+                                'router_name' => $router->router_name,
+                                'previous_state' => 'offline',
+                                'current_state' => 'online',
+                            ],
+                        ]);
+                    }
                     $recorded++;
                 }
             } catch (\Throwable $e) {

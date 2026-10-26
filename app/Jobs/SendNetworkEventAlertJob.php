@@ -15,7 +15,7 @@ class SendNetworkEventAlertJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 2;
-    public int $timeout = 20;
+    public int $timeout = 45;
 
     public function __construct(
         public int $eventId,

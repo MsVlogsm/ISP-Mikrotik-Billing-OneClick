@@ -26,7 +26,7 @@ Schedule::call(function () {
 
 Schedule::call(function () {
     app(ScheduledTasksController::class)->userDisable();
-})->dailyAt('08:30')->timezone($timezone);
+})->name('auto-disable-customers')->everyFiveMinutes()->timezone($timezone)->withoutOverlapping();
 
 Schedule::call(function () {
     app(MikrotikSync::class)->allSync();
@@ -62,7 +62,8 @@ Artisan::command('inspire', function () {
 
 Schedule::command('app:check-network-inventory')->everyMinute()->withoutOverlapping();
 Schedule::command('app:reconcile-mikrotik-pending-actions')->everyMinute()->withoutOverlapping();
-Schedule::command('olt:sync-onu-mappings')->everyFiveMinutes()->withoutOverlapping()->onOneServer();
+// Discover newly connected ONUs and resolve exact Customer/PPPoE matches every minute.
+Schedule::command('olt:sync-onu-mappings')->everyMinute()->withoutOverlapping()->onOneServer();
 Schedule::command('app:capture-customer-connection-snapshots')->everyFiveMinutes()->withoutOverlapping();
 
 // Daily due-customer voice reminders; no requests are sent unless configured and enabled.

@@ -46,9 +46,60 @@ class SMSSetup extends Component
         }
 
         try {
-            $this->profile = SmsBridge::profile();
-            $this->balance = SmsBridge::balance();
-        } catch (\Exception $e) {
+            // The LSMS driver currently supports sending only; fetch account details
+            // directly from its documented configured endpoints instead of returning null.
+            $gatewayService = app(\XLink\SmsBridge\Services\SmsBridgeService::class);
+            $activeGateway = $gatewayService->getDefaultGateway();
+            $credentials = config('sms-bridge.credentials', []);
+            $activeDriver = strtolower((string) ($activeGateway['name'] ?? SmsBridge::getDefaultDriver()));
+            if ($activeDriver === 'lsms') {
+                // Prefer credentials saved in the SMS Gateway UI, then environment config.
+                $credentials = array_merge($credentials, array_filter([
+                    'url' => $activeGateway['api_url'] ?? null,
+                    'api_key' => $activeGateway['api_key'] ?? null,
+                    'api_balance_url' => $activeGateway['api_balance_url'] ?? null,
+                    'api_profile_url' => $activeGateway['api_profile_url'] ?? null,
+                ], static fn ($value) => $value !== null && $value !== ''));
+            }
+            if ($activeDriver === 'lsms' && ! empty($credentials['url']) && ! empty($credentials['api_key'])) {
+                $baseUrl = rtrim((string) $credentials['url'], '/');
+                $baseUrl = preg_replace('#/api/v1(?:/smsapi)?$#i', '', $baseUrl);
+                $apiKey = (string) $credentials['api_key'];
+                $balancePath = trim((string) ($credentials['api_balance_url'] ?? 'balance'), '/');
+                $profilePath = trim((string) ($credentials['api_profile_url'] ?? 'user-info'), '/');
+                if (! str_contains($balancePath, '://') && ! str_starts_with($balancePath, 'api/v1/')) {
+                    $balancePath = 'api/v1/'.$balancePath;
+                }
+                if (! str_contains($profilePath, '://') && ! str_starts_with($profilePath, 'api/v1/')) {
+                    $profilePath = 'api/v1/'.$profilePath;
+                }
+                $balanceUrl = str_contains($balancePath, '://') ? $balancePath : $baseUrl.'/'.$balancePath;
+                $profileUrl = str_contains($profilePath, '://') ? $profilePath : $baseUrl.'/'.$profilePath;
+                $balanceResponse = \Illuminate\Support\Facades\Http::timeout(10)->acceptJson()->get($balanceUrl, ['api_key' => $apiKey]);
+                $profileResponse = \Illuminate\Support\Facades\Http::timeout(10)->acceptJson()->get($profileUrl, ['api_key' => $apiKey]);
+                $balanceData = $balanceResponse->json();
+                $profileData = $profileResponse->json();
+                $balanceOk = $balanceResponse->successful() && is_array($balanceData)
+                    && ! filter_var($balanceData['error'] ?? true, FILTER_VALIDATE_BOOLEAN) && isset($balanceData['balance']);
+                $profileOk = $profileResponse->successful() && is_array($profileData)
+                    && ! filter_var($profileData['error'] ?? true, FILTER_VALIDATE_BOOLEAN) && is_array($profileData['user'] ?? null);
+                $this->balance = $balanceOk ? [
+                    'status' => 'success',
+                    'data' => ['remaining_balance' => $balanceData['balance'], 'message' => $balanceData['message'] ?? null],
+                ] : ['status' => 'error'];
+                if ($profileOk) {
+                    $user = $profileData['user'];
+                    $user['first_name'] = $user['first_name'] ?? ($user['name'] ?? '');
+                    $user['last_name'] = $user['last_name'] ?? '';
+                    $this->profile = ['status' => 'success', 'data' => $user];
+                } else {
+                    $this->profile = ['status' => 'error'];
+                }
+            } else {
+                $this->profile = SmsBridge::profile();
+                $this->balance = SmsBridge::balance();
+            }
+        } catch (\Throwable $e) {
             $this->profile = null;
             $this->balance = null;
             report($e);

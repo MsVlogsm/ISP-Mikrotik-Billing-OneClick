@@ -17,6 +17,7 @@
         'inactive' => 'Left Customers',
         'unverified' => 'Unverified Customers',
         'online' => 'Online Customers',
+        'disabled' => 'Disabled Customers',
         default => 'Customer List',
     };
 @endphp
@@ -69,6 +70,9 @@
     <div class="card shadow-sm border-0 mb-3 filter-card">
         <div class="card-body">
             <form method="GET" class="row g-2">
+                @if($mode !== 'all')
+                    <input type="hidden" name="status" value="{{ $mode }}">
+                @endif
                 <div class="col-12 col-lg-4">
                     <label class="form-label mb-1">Search customer</label>
                     <input class="form-control" name="q" value="{{ request('q') }}" placeholder="CID, name, mobile, username, IP, NID, address, router or package">
@@ -123,7 +127,7 @@
 
     <div class="card shadow-sm border-0">
         <div class="card-header bg-transparent d-flex justify-content-between align-items-center">
-            <strong>{{ $mode === 'inactive' ? 'Left Customer Register' : 'Customer List' }}</strong>
+            <strong>{{ $mode === 'inactive' ? 'Left Customer Register' : ($mode === 'disabled' ? 'Disabled Customer List' : 'Customer List') }}</strong>
             <span class="text-muted small">{{ number_format($customers->total()) }} records</span>
         </div>
         <div class="table-responsive">
@@ -153,7 +157,17 @@
                             <td>{{ $customers->firstItem() + $loop->index }}</td>
                             <td><a class="fw-semibold text-decoration-none" href="{{ route('customers.show', $customerId) }}">{{ $c->customer_unique_id }}</a></td>
                             <td><strong>{{ $c->customer_name ?: 'Unnamed' }}</strong><div class="customer-meta text-muted">{{ $c->email ?: 'No email' }}</div></td>
-                            <td>{{ $c->mobile ?: '—' }}</td>
+                            <td>
+                                @if($c->mobile)
+                                    @php($dialNumber = preg_replace('/[^0-9+]/', '', (string) $c->mobile))
+                                    <span class="d-inline-flex align-items-center gap-2 text-nowrap">
+                                        <span>{{ $c->mobile }}</span>
+                                        <a class="btn btn-sm btn-outline-success py-1 px-2" href="tel:{{ $dialNumber }}" aria-label="Call {{ $c->mobile }}" title="Call customer"><i class="bi bi-telephone-fill" aria-hidden="true"></i> Call</a>
+                                    </span>
+                                @else
+                                    <span class="text-muted">—</span>
+                                @endif
+                            </td>
                             <td>{{ $c->zone_name ?: '—' }}</td>
                             <td>{{ $address ?: ($c->address ?: '—') }}</td>
                             <td>{{ $c->package->package ?? $c->pppUser->package_name ?? $c->package_name ?? '—' }}</td>
@@ -173,7 +187,17 @@
                                 <span class="badge text-bg-{{ $c->pppUser?->service === 'static' ? 'info' : 'secondary' }}">{{ strtoupper($c->pppUser?->service ?: 'N/A') }}</span>
                                 <div class="customer-meta">{{ $connection }}</div>
                             </td>
-                            <td>{{ $c->mobile ?: '—' }}</td>
+                            <td>
+                                @if($c->mobile)
+                                    @php($dialNumber = preg_replace('/[^0-9+]/', '', (string) $c->mobile))
+                                    <span class="d-inline-flex align-items-center gap-2 text-nowrap">
+                                        <span>{{ $c->mobile }}</span>
+                                        <a class="btn btn-sm btn-outline-success py-1 px-2" href="tel:{{ $dialNumber }}" aria-label="Call {{ $c->mobile }}" title="Call customer"><i class="bi bi-telephone-fill" aria-hidden="true"></i> Call</a>
+                                    </span>
+                                @else
+                                    <span class="text-muted">—</span>
+                                @endif
+                            </td>
                             <td>{{ $c->package->package ?? $c->pppUser->package_name ?? '—' }}</td>
                             <td>{{ $c->pppUser->router_name ?? '—' }}</td>
                             <td>

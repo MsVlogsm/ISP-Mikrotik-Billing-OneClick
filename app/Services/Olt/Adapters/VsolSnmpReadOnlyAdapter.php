@@ -44,6 +44,13 @@ class VsolSnmpReadOnlyAdapter implements OltReadOnlyAdapter
             return $this->fail($device, 'SNMP community is not configured for the adapter.');
         }
 
+        $address = $host;
+        $snmpPort = max(1, min(65535, (int) ($device->snmp_port ?: 161)));
+        // PHP's snmp2_get/snmp2_real_walk expect host:port, not the CLI
+        // snmpget transport syntax (udp:host:port). The latter makes PHP try
+        // to resolve "udp" as a hostname and silently returns no ONU rows.
+        $host = $address . ':' . $snmpPort;
+
         $timeout = min(max(100000, (int) ($config['timeout_us'] ?? 500000)), 1000000);
         $retries = min(max(0, (int) ($config['retries'] ?? 0)), 1);
 
@@ -86,10 +93,11 @@ class VsolSnmpReadOnlyAdapter implements OltReadOnlyAdapter
             'message' => 'Read-only VSOL SNMP probe completed.',
             'device' => [
                 'id' => $device->id,
-                'host' => $host,
+                'host' => $address,
                 'vendor' => $device->vendor,
                 'model' => $device->model,
                 'transport' => 'snmp',
+                'snmp_port' => $snmpPort,
                 'version' => strtoupper((string) ($config['version'] ?? $device->snmp_version ?? '2C')),
             ],
             'onus' => [],

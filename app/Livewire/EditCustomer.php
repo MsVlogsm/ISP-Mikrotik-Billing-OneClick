@@ -22,12 +22,16 @@ use Illuminate\Validation\ValidationException;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\ImageManager;
 use Livewire\Attributes\Validate;
+use Livewire\Attributes\Locked;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 
 class EditCustomer extends Component
 {
     use WithFileUploads;
+
+    #[Locked]
+    public bool $macResellerPortalMode = false;
 
     public $customerId;
 
@@ -98,12 +102,13 @@ class EditCustomer extends Component
 
     public function mount($customerId)
     {
-        if (! hasAccess(['Super Admin'], ['edit-customer']) && ! auth()->user()->hasRole('Reseller')) {
+        $this->macResellerPortalMode = auth()->user()->hasRole('Super Admin') && request()->is('mac-reseller*') && session()->has('mac_reseller_context_id');
+        if (! hasAccess(['Super Admin'], ['edit-customer']) && ! ($this->macResellerPortalMode || auth()->user()->hasRole('Reseller')) && ! $this->macResellerPortalMode) {
             abort(403, 'Unauthorized action.');
         }
 
         $this->addressFields = AddressField::all();
-        $isReseller = auth()->user()->hasRole('Reseller');
+        $isReseller = ($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'));
         $this->routers = RouterList::query()
             ->select('id', 'router_name', 'action')
             ->where('action', 'connected')
@@ -153,14 +158,18 @@ class EditCustomer extends Component
     public function loadPackagePrice(): void
     {
         $packageName = trim((string) ($this->fields['pppUser']['package_name'] ?? ''));
+        if (strcasecmp($packageName, 'Free Customer') === 0) {
+            $this->fields['billing']['monthly_rent'] = 0;
+            return;
+        }
         if ($packageName === '') {
             return;
         }
 
         $routerName = trim((string) ($this->fields['pppUser']['router_name'] ?? ''));
         $query = PackageList::where('package', $packageName);
-        if (auth()->user()->hasRole('Reseller')) {
-            $reseller = auth()->user()->reseller;
+        if (($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'))) {
+            $reseller = $this->macResellerPortalMode ? Reseller::where('panel_type', 'mac')->find(session('mac_reseller_context_id')) : auth()->user()->reseller;
             abort_unless($reseller, 403);
             $query->where(function ($q) use ($reseller) {
                 $q->whereIn('id', $reseller->assignedPackages()->select('package_lists.id'))
@@ -210,8 +219,8 @@ class EditCustomer extends Component
     {
         $query = CustomersInfo::where('customer_unique_id', decrypt($customerId))
             ->with('customerAddress', 'billing', 'official', 'pppUser', 'package');
-        if (auth()->user()->hasRole('Reseller')) {
-            $reseller = auth()->user()->reseller;
+        if (($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'))) {
+            $reseller = $this->macResellerPortalMode ? Reseller::where('panel_type', 'mac')->find(session('mac_reseller_context_id')) : auth()->user()->reseller;
             abort_unless($reseller && $reseller->isActive(), 403, 'Reseller account is not active.');
             $query->where('reseller_id', $reseller->id);
             // Hide cross-tenant IDs behind an explicit authorization response.
@@ -344,14 +353,14 @@ class EditCustomer extends Component
 
     public function saveEditForm(): void
     {
-        if (! hasAccess(['Super Admin'], ['edit-customer']) && ! auth()->user()->hasRole('Reseller')) {
+        if (! hasAccess(['Super Admin'], ['edit-customer']) && ! ($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'))) {
             abort(403, 'Unauthorized action.');
         }
 
         $uid = decrypt($this->customerId);
         $customer = CustomersInfo::where('customer_unique_id', $uid)->with(['pppUser', 'billing', 'official'])->firstOrFail();
-        if (auth()->user()->hasRole('Reseller')) {
-            $reseller = auth()->user()->reseller;
+        if (($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'))) {
+            $reseller = $this->macResellerPortalMode ? Reseller::where('panel_type', 'mac')->find(session('mac_reseller_context_id')) : auth()->user()->reseller;
             abort_unless($reseller && $customer->reseller_id === $reseller->id, 403, 'You can only edit your own clients.');
         }
         $newUid = trim((string) ($this->fields['customer']['customer_unique_id'] ?? ''));
@@ -436,15 +445,24 @@ class EditCustomer extends Component
             }
 
             $packageName = $this->fields['pppUser']['package_name'] ?? null;
-            if ($packageName) {
+            $isResellerEditor = $this->macResellerPortalMode || auth()->user()->hasRole('Reseller');
+            if (strcasecmp(trim((string) $packageName), 'Free Customer') === 0) {
+                $customer->package_id = null;
+                // Do not let reseller edits bypass the approval/status guard.
+                // For approved customer accounts, keep the status aligned with the free plan.
+                if (! $isResellerEditor && in_array((string) $customer->status, ['active', 'free'], true)) {
+                    $customer->status = 'free';
+                }
+                $customer->save();
+            } elseif ($packageName) {
                 $packageQuery = PackageList::where('package', $packageName)
                     ->when($customer->pppUser?->router_name, function ($q, $router) {
                         $q->where(function ($routeQuery) use ($router) {
                             $routeQuery->where('router_name', $router)->orWhereNull('router_name');
                         });
                     });
-                if (auth()->user()->hasRole('Reseller')) {
-                    $reseller = auth()->user()->reseller;
+                if ($isResellerEditor) {
+                    $reseller = $this->macResellerPortalMode ? Reseller::where('panel_type', 'mac')->find(session('mac_reseller_context_id')) : auth()->user()->reseller;
                     abort_unless($reseller, 403);
                     $packageQuery->where(function ($q) use ($reseller) {
                         $q->whereIn('id', $reseller->assignedPackages()->select('package_lists.id'))
@@ -454,6 +472,10 @@ class EditCustomer extends Component
                 $package = $packageQuery->first();
                 if ($package) {
                     $customer->package_id = $package->id;
+                    // Switching from Free Customer back to a real package restores the normal status.
+                    if (! $isResellerEditor && $customer->status === 'free') {
+                        $customer->status = 'active';
+                    }
                     $customer->save();
                 }
             }
@@ -521,8 +543,8 @@ class EditCustomer extends Component
         flash()->addSuccess('Customer updated successfully.');
 
         // Return the reseller to its own isolated client list after a successful save.
-        if (auth()->user()->hasRole('Reseller')) {
-            $routePrefix = auth()->user()->reseller?->isMacPanel() ? 'mac-reseller' : 'reseller';
+        if (($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'))) {
+            $routePrefix = ($this->macResellerPortalMode || auth()->user()->reseller?->isMacPanel()) ? 'mac-reseller' : 'reseller';
             $this->redirectRoute($routePrefix.'.customers.index', navigate: true);
             return;
         }
@@ -721,7 +743,7 @@ class EditCustomer extends Component
 
     public function savePPPUser()
     {
-        if (auth()->user()->hasRole('Reseller')) {
+        if (($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'))) {
             abort(403, 'Unauthorized action.');
         }
         try {
@@ -857,8 +879,8 @@ class EditCustomer extends Component
     public function deletePhoto()
     {
         $photoUrl = CustomersInfo::where('customer_unique_id', decrypt($this->customerId))->firstOrFail();
-        if (auth()->user()->hasRole('Reseller')) {
-            $reseller = auth()->user()->reseller;
+        if (($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'))) {
+            $reseller = $this->macResellerPortalMode ? Reseller::where('panel_type', 'mac')->find(session('mac_reseller_context_id')) : auth()->user()->reseller;
             abort_unless($reseller && $photoUrl->reseller_id === $reseller->id, 403, 'You can only edit your own clients.');
         }
         if ($photoUrl->photo_url && file_exists(public_path($photoUrl->photo_url))) {
@@ -874,8 +896,8 @@ class EditCustomer extends Component
     public function savePhoto()
     {
         $customer = CustomersInfo::where('customer_unique_id', decrypt($this->customerId))->firstOrFail();
-        if (auth()->user()->hasRole('Reseller')) {
-            $reseller = auth()->user()->reseller;
+        if (($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'))) {
+            $reseller = $this->macResellerPortalMode ? Reseller::where('panel_type', 'mac')->find(session('mac_reseller_context_id')) : auth()->user()->reseller;
             abort_unless($reseller && $customer->reseller_id === $reseller->id, 403, 'You can only edit your own clients.');
         }
 
@@ -920,8 +942,8 @@ class EditCustomer extends Component
     {
         $uid = decrypt($this->customerId);
         $customerQuery = CustomersInfo::where('customer_unique_id', $uid);
-        if (auth()->user()->hasRole('Reseller')) {
-            $reseller = auth()->user()->reseller;
+        if (($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'))) {
+            $reseller = $this->macResellerPortalMode ? Reseller::where('panel_type', 'mac')->find(session('mac_reseller_context_id')) : auth()->user()->reseller;
             abort_unless($reseller, 403);
             $customerQuery->where('reseller_id', $reseller->id);
         }
@@ -957,17 +979,17 @@ class EditCustomer extends Component
 
     public function updateCustomer($field, $value)
     {
-        if (! hasAccess(['Super Admin'], ['edit-customer']) && ! auth()->user()->hasRole('Reseller')) {
+        if (! hasAccess(['Super Admin'], ['edit-customer']) && ! ($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'))) {
             abort(403, 'Unauthorized action.');
         }
 
         $customer = CustomersInfo::where('customer_unique_id', decrypt($this->customerId))->firstOrFail();
-        if (auth()->user()->hasRole('Reseller')) {
-            $reseller = auth()->user()->reseller;
+        if (($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'))) {
+            $reseller = $this->macResellerPortalMode ? Reseller::where('panel_type', 'mac')->find(session('mac_reseller_context_id')) : auth()->user()->reseller;
             abort_unless($reseller && $customer->reseller_id === $reseller->id, 403, 'You can only edit your own clients.');
         }
 
-        if (auth()->user()->hasRole('Reseller')) {
+        if (($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'))) {
             if (! str_contains((string) $field, '.')
                 && ! in_array($field, ['customer_unique_id', 'customer_name', 'email', 'mobile', 'alternative_mobile', 'identification_no', 'profession', 'connection_date'], true)) {
                 abort(403, 'This field cannot be edited by a reseller.');
@@ -1074,8 +1096,8 @@ class EditCustomer extends Component
         }
 
         if ($customer) {
-            if (auth()->user()->hasRole('Reseller')) {
-                $reseller = auth()->user()->reseller;
+            if (($this->macResellerPortalMode || auth()->user()->hasRole('Reseller'))) {
+                $reseller = $this->macResellerPortalMode ? Reseller::where('panel_type', 'mac')->find(session('mac_reseller_context_id')) : auth()->user()->reseller;
                 if (! $reseller || $customer->reseller_id !== $reseller->id) {
                     abort(403, 'Unauthorized action.');
                 }

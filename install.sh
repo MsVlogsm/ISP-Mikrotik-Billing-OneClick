@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO="https://github.com/MsVlogs/ISP-Mikrotik-Billing-OneClick.git"
+REPO="https://github.com/MsVlogsm/ISP-Mikrotik-Billing-OneClick.git"
 APP_DIR="${APP_DIR:-/var/www/isp-billing}"
 APP_USER="${APP_USER:-www-data}"
 DOMAIN="${DOMAIN:-bill.xlinkbd.net}"

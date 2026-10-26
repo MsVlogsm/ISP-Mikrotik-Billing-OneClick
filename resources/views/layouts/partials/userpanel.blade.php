@@ -1,12 +1,10 @@
 {{-- theme, alerts and settings --}}
 <ul class="navbar-nav navbar-nav-icons ms-auto flex-row align-items-center">
-    @if (request()->routeIs('dashboard'))
-        <li class="nav-item me-2">
-            <a href="{{ route('broadband-online-customers') }}" class="nav-link d-flex align-items-center gap-1 px-2 py-1 rounded-pill border text-success fw-semibold" title="Online Customer Monitoring">
-                <i class="bi bi-broadcast-pin"></i><span class="d-none d-xl-inline">Online Customers</span>
-            </a>
-        </li>
-    @endif
+    <li class="nav-item me-2">
+        <a href="{{ route('broadband-online-customers') }}" class="nav-link d-flex align-items-center gap-1 px-2 py-1 rounded-pill border text-success fw-semibold" title="Online Customer Monitoring" aria-label="Online Customers">
+            <i class="bi bi-broadcast-pin"></i><span class="d-none d-xl-inline">Online Customers</span>
+        </a>
+    </li>
     <li class="nav-item dropdown" wire:ignore
         x-data="{
             current: new Date('{{ now()->format('Y-m-d H:i:s') }}'),
@@ -144,9 +142,6 @@
             <div class="bg-white dark__bg-1000 rounded-2 py-2">
                 <a wire:navigate.hover wire:current="active" class="dropdown-item" href="{{route('profile.show')}}">{{ __('Profile & account') }}</a>
                 <div class="dropdown-divider"></div>
-                @if (hasAccess(['Super Admin'], ['site-settings']))
-                    <a class="dropdown-item" wire:navigate.hover wire:current="active" href="{{route('site-settings')}}">{{ __('Master Setup') }}</a>
-                @endif
                 @if (hasAccess(['Super Admin'], ['create-user', 'edit-user', 'delete-user']))
                     <a class="dropdown-item" wire:navigate.hover wire:current="active" href="{{route('admin-users')}}">{{ __('Manage Users') }}</a>
                 @endif

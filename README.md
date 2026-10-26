@@ -73,8 +73,8 @@ graph TD
 
 1. **Clone the Repository**
    ```bash
-   git clone https://github.com/MsVlogs/ISP-Mikrotik-Billing.git
-   cd ISP-Mikrotik-Billing
+   git clone https://github.com/MsVlogsm/ISP-Mikrotik-Billing-OneClick.git
+   cd ISP-Mikrotik-Billing-OneClick
    ```
 
 2. **Install Composer Dependencies**

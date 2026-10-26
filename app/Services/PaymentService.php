@@ -10,6 +10,7 @@ use App\Models\CollectionSummary;
 use App\Models\CustomersInfo;
 use App\Models\PaymentSummary;
 use App\Models\PPPSecrets;
+use App\Services\PrepaidBillingCycle;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -21,7 +22,7 @@ class PaymentService
      * Process a successful online payment, update billing records,
      * record collection summary, and activate the user on MikroTik.
      */
-    public function processSuccessPayment(CustomersInfo $customer, float $amount, string $gateway, string $trxId): bool
+    public function processSuccessPayment(CustomersInfo $customer, float $amount, string $gateway, string $trxId, array $metadata = []): bool
     {
         $trxId = trim($trxId);
         if ($trxId === '' || $amount <= 0) {
@@ -114,11 +115,37 @@ class PaymentService
                 }
             }
 
-            // Generate next sequential invoice number
-            $maxInvoice = CollectionSummary::max('invoice_no');
-            $invoiceNo = $maxInvoice ? ($maxInvoice + 1) : 100001;
+            $prepaidRentPaid = $billing->billing_type === 'prepaid'
+                && (float) $billing->monthly_rent > 0
+                && $amount >= (float) $billing->monthly_rent;
+
+            // Prepaid expiry follows the connection-day anchor while retaining existing
+            // payment allocation, advance-month, and prorated-validity rules.
+            if ($billing->billing_type === 'prepaid' && ! $isProratedApplied) {
+                $cycleAnchor = $customer->connection_date ?: ($billing->auto_disable_date ?: today()->toDateString());
+                $expiryToAlign = $expireDate ?: ($billing->auto_disable_date ?: today()->toDateString());
+                $alignedExpiry = PrepaidBillingCycle::alignToConnectionDay($cycleAnchor, $expiryToAlign);
+
+                // Never reactivate a prepaid customer with an expiry still in the past.
+                // Preserve old-due accounting, but start the paid validity at the next connection day.
+                if (($newDue <= 0 || $allowPartialActivation || $prepaidRentPaid) && $alignedExpiry->lte(today())) {
+                    $expireDate = PrepaidBillingCycle::nextExpiryDate($cycleAnchor, today())->toDateString();
+                } else {
+                    $expireDate = $alignedExpiry->toDateString();
+                }
+            }
+
+            // Use the same transaction-safe invoice sequence as manual collections.
+            $invoiceNo = CollectionSummary::nextInvoiceNumber();
 
             // 2. Create Collection Record
+            $paymentDetails = array_filter([
+                'source' => $metadata['source'] ?? null,
+                'external_invoice_id' => $metadata['external_invoice_id'] ?? null,
+                'notes' => $metadata['notes'] ?? null,
+                'api_token_id' => $metadata['api_token_id'] ?? null,
+            ], static fn ($value) => $value !== null && $value !== '');
+
             CollectionSummary::create([
                 'customer_collection_unique_id' => $customer->customer_unique_id,
                 'collection_date' => Carbon::now(),
@@ -127,6 +154,7 @@ class PaymentService
                 'payment_type' => 'online',
                 'payment_method' => $gateway,
                 'transaction_id' => $trxId,
+                'details' => $paymentDetails ? json_encode($paymentDetails, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null,
                 'payment_status' => 'paid',
                 'invoice_no' => $invoiceNo,
                 'bill_month' => Carbon::now()->format('F Y'),
@@ -159,7 +187,7 @@ class PaymentService
             }
 
             // 5. Update customer status based on due and partial activation setting
-            if ($newDue == 0 || $allowPartialActivation || $isProratedApplied) {
+            if ($newDue == 0 || $allowPartialActivation || $isProratedApplied || $prepaidRentPaid) {
                 $customer->status = 'active';
                 $customer->disable_count = 0;
             } else {
@@ -168,7 +196,7 @@ class PaymentService
             $customer->save();
 
             // 6. Extend auto_disable_date if today is beyond it
-            if (! $isProratedApplied && $billing->auto_disable_date) {
+            if ($billing->billing_type !== 'prepaid' && ! $isProratedApplied && $billing->auto_disable_date) {
                 $autoDisableDate = Carbon::parse($billing->auto_disable_date)->startOfDay();
                 $autoDisableMonth = $billing->auto_disable_month;
                 $disableDate = $autoDisableDate->copy()->addMonths($autoDisableMonth);
@@ -183,44 +211,105 @@ class PaymentService
                 }
             }
 
-            // 7. Enable customer on Mikrotik Router
+            // 7. Sync the PPP account after billing state is updated.
+            // A confirmed gateway payment must not be rolled back just because the
+            // router is temporarily unreachable; queue an idempotent retry instead.
             if ($customer->pppUser) {
-                if ($customer->status === 'active') {
-                    // Enable secret (calls router via API/SSH)
-                    app(MikrotikController::class)->enablePPPSecret(
-                        $customer->customer_unique_id,
-                        $customer->pppUser->router_name,
-                        $customer->pppUser->username
-                    );
+                $routerName = $customer->pppUser->router_name;
+                $username = $customer->pppUser->username;
 
-                    // Restore their original plan profile
-                    app(MikrotikController::class)->updatePPPSecret(
-                        $customer->pppUser->router_name,
-                        $customer->pppUser->username,
-                        'profile',
-                        $customer->pppUser->profile
-                    );
+                if (filled($routerName) && filled($username)) {
+                    if ($customer->status === 'active') {
+                        try {
+                            app(MikrotikController::class)->enablePPPSecret(
+                                $customer->customer_unique_id,
+                                $routerName,
+                                $username
+                            );
 
-                    // Kick any current session to force reconnect with the active profile
-                    try {
-                        app(MikrotikController::class)->singleWrite(
-                            $customer->pppUser->router_name,
-                            '/ppp active remove [find name="'.$customer->pppUser->username.'"]'
-                        );
-                    } catch (\Exception $e) {
-                        Log::debug('PaymentService session kick skipped: '.$e->getMessage());
+                            if (filled($customer->pppUser->profile)) {
+                                app(MikrotikController::class)->updatePPPSecret(
+                                    $routerName,
+                                    $username,
+                                    'profile',
+                                    $customer->pppUser->profile
+                                );
+                            }
+
+                            try {
+                                app(MikrotikController::class)->singleWrite(
+                                    $routerName,
+                                    '/ppp active remove [find name="'.$username.'"]'
+                                );
+                            } catch (\Throwable $e) {
+                                Log::debug('PaymentService session kick skipped: '.$e->getMessage());
+                            }
+
+                            PPPSecrets::where('id', $customer->ppp_user_id)->update(['status' => 'active']);
+                        } catch (\Throwable $routerError) {
+                            Log::warning('Online payment recorded; MikroTik activation queued after router failure.', [
+                                'customer_unique_id' => $customer->customer_unique_id,
+                                'router' => $routerName,
+                                'username' => $username,
+                                'error' => $routerError->getMessage(),
+                            ]);
+                            try {
+                                app(MikrotikPendingActionQueue::class)->queue(
+                                    $customer->customer_unique_id,
+                                    $routerName,
+                                    $username,
+                                    'enable'
+                                );
+                            } catch (\Throwable $queueError) {
+                                Log::critical('Unable to queue MikroTik activation after successful online payment.', [
+                                    'customer_unique_id' => $customer->customer_unique_id,
+                                    'router' => $routerName,
+                                    'username' => $username,
+                                    'error' => $queueError->getMessage(),
+                                ]);
+                            }
+                            PPPSecrets::where('id', $customer->ppp_user_id)->update(['status' => 'active']);
+                        }
+                    } else {
+                        try {
+                            app(MikrotikController::class)->disablePPPSecret(
+                                $customer->customer_unique_id,
+                                $routerName,
+                                $username,
+                                false,
+                                true
+                            );
+                        } catch (\Throwable $routerError) {
+                            Log::warning('MikroTik disable queued after partial-payment decision.', [
+                                'customer_unique_id' => $customer->customer_unique_id,
+                                'router' => $routerName,
+                                'username' => $username,
+                                'error' => $routerError->getMessage(),
+                            ]);
+                            try {
+                                app(MikrotikPendingActionQueue::class)->queue(
+                                    $customer->customer_unique_id,
+                                    $routerName,
+                                    $username,
+                                    'disable'
+                                );
+                            } catch (\Throwable $queueError) {
+                                Log::critical('Unable to queue MikroTik disable action.', [
+                                    'customer_unique_id' => $customer->customer_unique_id,
+                                    'router' => $routerName,
+                                    'username' => $username,
+                                    'error' => $queueError->getMessage(),
+                                ]);
+                            }
+                        }
+                        PPPSecrets::where('id', $customer->ppp_user_id)->update(['status' => 'disabled']);
                     }
-
-                    // Sync the local PPPSecrets status
-                    PPPSecrets::where('id', $customer->ppp_user_id)->update(['status' => 'active']);
                 } else {
-                    // Disable secret on router if not active
-                    app(MikrotikController::class)->disablePPPSecret(
-                        $customer->customer_unique_id,
-                        $customer->pppUser->router_name,
-                        $customer->pppUser->username
-                    );
-                    PPPSecrets::where('id', $customer->ppp_user_id)->update(['status' => 'disabled']);
+                    Log::warning('Payment processed but PPP activation skipped because router/user mapping is incomplete.', [
+                        'customer_unique_id' => $customer->customer_unique_id,
+                        'router' => $routerName,
+                        'username' => $username,
+                    ]);
                 }
             }
 
