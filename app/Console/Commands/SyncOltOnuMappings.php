@@ -7,6 +7,7 @@ use App\Models\NetworkInventoryDevice;
 use App\Models\OltOnuCustomerMapping;
 use App\Models\PPPSecrets;
 use App\Services\Olt\OltReadOnlyAdapterManager;
+use App\Services\OnuMacLedgerService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 
@@ -15,7 +16,7 @@ class SyncOltOnuMappings extends Command
     protected $signature = 'olt:sync-onu-mappings {--device= : OLT device ID} {--dry-run : Read and resolve mappings without writing the local database}';
     protected $description = 'Read-only sync of ONU/customer mappings from OLT read-only adapters or configured telemetry';
 
-    public function handle(OltReadOnlyAdapterManager $manager): int
+    public function handle(OltReadOnlyAdapterManager $manager, OnuMacLedgerService $ledgerService): int
     {
         $query = NetworkInventoryDevice::where('type', 'olt');
         if ($this->option('device')) $query->whereKey((int) $this->option('device'));
@@ -33,6 +34,11 @@ class SyncOltOnuMappings extends Command
             // BDCOM/EPON discovery order can change between SNMP polls, so using only
             // onu_id can attach an old customer to a different physical ONU.
             $existingMappings = OltOnuCustomerMapping::where('olt_device_id', $olt->id)->get();
+            // A dry-run must remain entirely read-only, including auxiliary history tables.
+            if (! $this->option('dry-run')) {
+                $ledgerService->bootstrapMissingMappings($existingMappings);
+            }
+            $seenMappingIds = [];
             $byId = $existingMappings->keyBy(fn ($m) => (string) $m->onu_id);
             $byMac = $existingMappings->filter(fn ($m) => trim((string) $m->onu_mac) !== '')
                 ->groupBy(fn ($m) => $this->normalizeMac($m->onu_mac));
@@ -65,7 +71,11 @@ class SyncOltOnuMappings extends Command
             }
 
             foreach ($rows as $row) {
-                if (!is_array($row)) continue;
+                if (!is_array($row)) {
+                    $skipped++;
+                    $issues[] = 'invalid ONU row was not an array';
+                    continue;
+                }
                 $onuId = $row['onu_id'] ?? $row['onuId'] ?? $row['id'] ?? $row['snmp_index'] ?? null;
                 if ($onuId === null || trim((string) $onuId) === '') { $skipped++; $issues[] = 'missing ONU id'; continue; }
                 $onuId = trim((string) $onuId);
@@ -122,6 +132,12 @@ class SyncOltOnuMappings extends Command
                     }
                 }
 
+                // Track the persisted mapping resolved by stable MAC/serial identity,
+                // or by the existing ID after the conflict checks above.
+                if ($existingMapping) {
+                    $seenMappingIds[(string) $existingMapping->id] = true;
+                }
+
                 if ($allowAutoMatch && ! $customerId) {
                     // Apply only an unambiguous exact match. This covers new ONU rows,
                     // existing-unmapped rows, and rows whose old index identity changed.
@@ -164,6 +180,21 @@ class SyncOltOnuMappings extends Command
                     if (!$candidates) {
                         $ipKey = trim((string) ($row['onu_ip'] ?? $row['ip'] ?? ''));
                         $candidates = $availableCandidates($ipKey !== '' ? ($byRemoteIp[$ipKey] ?? []) : []);
+                    }
+
+                    // Use the MAC ledger only as a last exact-identity source. If the live
+                    // OLT supplies a PPPoE username, that stronger source must be resolved first.
+                    if (!$candidates && $onuUsername === '') {
+                        $ledgerCustomer = $ledgerService->findExactCustomerMatch(
+                            (int) $olt->id,
+                            $onuMac === null ? null : (string) $onuMac,
+                            $onuSerial === null ? null : (string) $onuSerial,
+                            $usedCustomerIds,
+                            $usedPppIds,
+                        );
+                        if ($ledgerCustomer) {
+                            $candidates = [$ledgerCustomer];
+                        }
                     }
 
                     if (count($candidates) === 1) {
@@ -242,16 +273,77 @@ class SyncOltOnuMappings extends Command
                     if (! $idConflict) $existingMapping->onu_id = $onuId;
                     $existingMapping->fill($mappingData);
                     $existingMapping->save();
+                    $ledgerService->recordMapping($existingMapping);
                 } else {
-                    OltOnuCustomerMapping::create($mappingData + [
+                    $savedMapping = OltOnuCustomerMapping::create($mappingData + [
                         'olt_device_id' => $olt->id,
                         'onu_id' => (string) $onuId,
                     ]);
+                    $ledgerService->recordMapping($savedMapping);
                 }
                 $count++;
             }
-            $this->info("OLT {$olt->id}: normalized {$count} ONU rows synced; auto-mapped {$autoMapped} unambiguous customer matches; skipped {$skipped} invalid rows.");
+            // Only make absence claims after a complete, healthy, explicitly read-only
+            // poll. Do not infer offline status or overwrite any customer/PPPoE mapping.
+            $completeReadOnlyPoll = ($result['status'] ?? null) === 'ok'
+                && is_array($result['meta'] ?? null)
+                && (($result['meta']['read_only'] ?? false) === true)
+                && array_key_exists('writes_performed', $result['meta'])
+                && ($result['meta']['writes_performed'] === false)
+                && $count === count($rows)
+                && $skipped === 0;
+
+            // Keep OLT-level live counters in sync only after a complete, verified,
+            // read-only poll. Capacity remains a separate PON-port property.
+            if ($completeReadOnlyPoll && ! $this->option('dry-run')) {
+                $liveOnuIds = collect($rows)
+                    ->map(fn (array $row) => trim((string) ($row['onu_id'] ?? $row['onuId'] ?? $row['id'] ?? $row['snmp_index'] ?? '')))
+                    ->filter(fn (string $id) => $id !== '')
+                    ->unique()
+                    ->values();
+                $liveTotal = $liveOnuIds->count();
+                $liveOnline = collect($rows)
+                    ->filter(fn (array $row) => $this->normalizeStatus($row) === 'online')
+                    ->count();
+                $mappedCustomerCount = OltOnuCustomerMapping::where('olt_device_id', $olt->id)
+                    ->whereIn('onu_id', $liveOnuIds->all())
+                    ->whereNotNull('customer_id')
+                    ->distinct()
+                    ->count('customer_id');
+
+                $olt->update([
+                    'onu_total' => $liveTotal,
+                    'onu_online' => $liveOnline,
+                    'customer_count' => $mappedCustomerCount,
+                ]);
+                $this->line("OLT {$olt->id}: live counters reconciled — {$liveOnline}/{$liveTotal} online; {$mappedCustomerCount} mapped customers.");
+            }
+
+            $staleCandidates = $existingMappings->filter(
+                fn ($mapping) => strtolower(trim((string) $mapping->status)) === 'online'
+                    && ! isset($seenMappingIds[(string) $mapping->id])
+            );
+
+            if ($completeReadOnlyPoll) {
+                foreach ($staleCandidates as $staleMapping) {
+                    $this->warn("OLT {$olt->id}: ONU {$staleMapping->onu_id} / ".($staleMapping->onu_mac ?: 'MAC unknown')
+                        ." is stored as online but absent from this complete read-only poll; status and mapping were left unchanged pending review.");
+                }
+            } elseif ($staleCandidates->isNotEmpty()) {
+                $issues[] = 'Some stored online ONU rows were absent, but no absence warning was trusted because the poll was partial, invalid, or not explicitly verified as read-only.';
+            }
+
+            $this->info("OLT {$olt->id}: normalized {$count} ONU rows synced; auto-mapped {$autoMapped} unambiguous customer matches; stale online rows not observed: ".($completeReadOnlyPoll ? $staleCandidates->count() : 'not assessed')."; skipped {$skipped} invalid rows.");
             foreach (array_slice($issues, 0, 10) as $issue) $this->warn($issue);
+
+            if (!empty($result['meta']['model_profile_mismatch'])) {
+                $inventoryModel = (string) ($result['meta']['inventory_model'] ?? $olt->model ?? 'unknown');
+                $liveModel = (string) ($result['meta']['snmp_sys_descr'] ?? 'unknown');
+                $this->warn("OLT {$olt->id}: inventory model {$inventoryModel} differs from live sysDescr {$liveModel}; the adapter selected its live-verified read profile.");
+            }
+            if (($result['meta']['opm_status'] ?? null) === 'not_ready') {
+                $this->warn("OLT {$olt->id}: optical TX/RX readings are unavailable in this poll; historical OPM values and timestamps were preserved.");
+            }
             if (count($issues) > 10) $this->warn('Additional mapping validation issues: '.(count($issues)-10));
         }
         return self::SUCCESS;

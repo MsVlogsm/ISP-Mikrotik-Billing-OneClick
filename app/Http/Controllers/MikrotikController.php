@@ -1138,13 +1138,26 @@ class MikrotikController extends Controller
      */
     public function getLivePppTelemetry(): array
     {
-        return \Cache::remember('mikrotik:live_ppp_telemetry', now()->addSeconds(30), function () {
+        return \Cache::remember('mikrotik:live_ppp_telemetry:v2', now()->addSeconds(30), function () {
             $routers = [];
             $total = 0;
             $successful = 0;
 
             foreach (RouterList::query()->get() as $router) {
                 $name = (string) $router->router_name;
+
+                // A disconnected router must never be polled for live telemetry.
+                // Keep it visible as unavailable rather than treating it as zero sessions.
+                if (($router->action ?? null) !== 'connected') {
+                    $routers[$name] = [
+                        'status' => 'unavailable',
+                        'count' => null,
+                        'synced_at' => \Cache::get("mikrotik:live_ppp_last_success:{$name}"),
+                        'type' => null,
+                    ];
+                    continue;
+                }
+
                 try {
                     $result = $this->checkConnection(
                         $router->ip_address,
@@ -1160,12 +1173,24 @@ class MikrotikController extends Controller
                     );
 
                     if (($result['status'] ?? false) === true) {
-                        $count = count($result['data'] ?? []);
+                        $sessions = $result['data'] ?? [];
+                        $count = count($sessions);
+                        $usernames = [];
+                        foreach ($sessions as $session) {
+                            $username = is_array($session)
+                                ? ($session['name'] ?? '')
+                                : (is_object($session) ? ($session->name ?? '') : '');
+                            $username = mb_strtolower(trim((string) $username));
+                            if ($username !== '') {
+                                $usernames[] = $username;
+                            }
+                        }
                         $syncedAt = now()->toIso8601String();
                         \Cache::forever("mikrotik:live_ppp_last_success:{$name}", $syncedAt);
                         $routers[$name] = [
                             'status' => 'ok',
                             'count' => $count,
+                            'usernames' => array_values(array_unique($usernames)),
                             'synced_at' => $syncedAt,
                             'type' => $result['type'] ?? null,
                         ];

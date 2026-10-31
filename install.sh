@@ -22,6 +22,29 @@ trap 'die "Installation failed at line $LINENO. Check the output above."' ERR
 [[ "${ID:-}" == "ubuntu" ]] || die "Ubuntu LTS is required. Detected: ${PRETTY_NAME:-unknown}"
 case "${VERSION_ID:-}" in 22.04|24.04) ;; *) die "Supported Ubuntu versions: 22.04 and 24.04 LTS." ;; esac
 
+[[ "$APP_DIR" == /* && "$APP_DIR" != "/" && "$APP_DIR" != "/var" && "$APP_DIR" != "/var/www" ]] || die "APP_DIR must be a dedicated absolute application directory."
+[[ "$DB_NAME" =~ ^[A-Za-z0-9_]{1,64}$ ]] || die "DB_NAME may contain only letters, numbers, and underscores (max 64 characters)."
+[[ "$DB_USER" =~ ^[A-Za-z0-9_]{1,32}$ ]] || die "DB_USER may contain only letters, numbers, and underscores (max 32 characters)."
+[[ "$APP_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "APP_USER must be a valid Linux account name."
+
+valid_port() {
+  [[ "$1" =~ ^[0-9]{1,5}$ ]] || return 1
+  local port=$((10#$1))
+  (( port >= 1024 && port <= 65535 ))
+}
+valid_port "$BILLING_PORT" || die "BILLING_PORT must be between 1024 and 65535."
+valid_port "$PORTAL_PORT" || die "PORTAL_PORT must be between 1024 and 65535."
+BILLING_PORT=$((10#$BILLING_PORT))
+PORTAL_PORT=$((10#$PORTAL_PORT))
+(( BILLING_PORT != PORTAL_PORT )) || die "Billing and portal ports must be different."
+
+valid_domain() {
+  local host="$1"
+  [[ "$host" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]] &&
+    [[ "$host" != *..* && "$host" != *.-* && "$host" != *-.* ]]
+}
+valid_domain "$DOMAIN" || die "DOMAIN must be a valid DNS name or IP address."
+
 if [[ ! -f "$APP_DIR/install.sh" ]]; then
   log "Preparing application directory"
   mkdir -p "$(dirname "$APP_DIR")"
@@ -34,24 +57,29 @@ if [[ ! -f "$APP_DIR/install.sh" ]]; then
   exec env APP_DIR="$APP_DIR" DOMAIN="$DOMAIN" BILLING_PORT="$BILLING_PORT" PORTAL_PORT="$PORTAL_PORT" DB_NAME="$DB_NAME" DB_USER="$DB_USER" bash "$APP_DIR/install.sh"
 fi
 
+[[ ! -f "$APP_DIR/.env" ]] || die "An existing .env was found in $APP_DIR. This installer is for fresh installations only; it will not reconfigure an existing deployment."
+
 log "Installing OS packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y software-properties-common ca-certificates curl git unzip nginx mariadb-server mariadb-client supervisor \
-  build-essential pkg-config libzip-dev libpng-dev libjpeg-dev libfreetype6-dev libonig-dev libxml2-dev libcurl4-openssl-dev
+  build-essential pkg-config libzip-dev libpng-dev libjpeg-dev libfreetype6-dev libonig-dev libxml2-dev libcurl4-openssl-dev \
+  iproute2 iptables ipset snmp logrotate
 
 PHP_BIN="$(command -v php${PHP_VERSION} || true)"
 if [[ -z "$PHP_BIN" ]]; then
   log "Adding maintained PHP repository"
   add-apt-repository -y ppa:ondrej/php
   apt-get update
-  apt-get install -y php${PHP_VERSION} php${PHP_VERSION}-cli php${PHP_VERSION}-fpm php${PHP_VERSION}-common php${PHP_VERSION}-mysql php${PHP_VERSION}-mbstring php${PHP_VERSION}-xml php${PHP_VERSION}-curl php${PHP_VERSION}-zip php${PHP_VERSION}-gd php${PHP_VERSION}-bcmath php${PHP_VERSION}-intl php${PHP_VERSION}-opcache
+  apt-get install -y php${PHP_VERSION} php${PHP_VERSION}-cli php${PHP_VERSION}-fpm php${PHP_VERSION}-common php${PHP_VERSION}-mysql php${PHP_VERSION}-mbstring php${PHP_VERSION}-xml php${PHP_VERSION}-curl php${PHP_VERSION}-zip php${PHP_VERSION}-gd php${PHP_VERSION}-bcmath php${PHP_VERSION}-intl php${PHP_VERSION}-opcache php${PHP_VERSION}-snmp
   PHP_BIN="$(command -v php${PHP_VERSION})"
 else
-  apt-get install -y php${PHP_VERSION}-cli php${PHP_VERSION}-fpm php${PHP_VERSION}-common php${PHP_VERSION}-mysql php${PHP_VERSION}-mbstring php${PHP_VERSION}-xml php${PHP_VERSION}-curl php${PHP_VERSION}-zip php${PHP_VERSION}-gd php${PHP_VERSION}-bcmath php${PHP_VERSION}-intl php${PHP_VERSION}-opcache
+  apt-get install -y php${PHP_VERSION}-cli php${PHP_VERSION}-fpm php${PHP_VERSION}-common php${PHP_VERSION}-mysql php${PHP_VERSION}-mbstring php${PHP_VERSION}-xml php${PHP_VERSION}-curl php${PHP_VERSION}-zip php${PHP_VERSION}-gd php${PHP_VERSION}-bcmath php${PHP_VERSION}-intl php${PHP_VERSION}-opcache php${PHP_VERSION}-snmp
 fi
 
 PHP_VERSION_ACTUAL="$($PHP_BIN -r 'echo PHP_VERSION;')"
+update-alternatives --install /usr/bin/php php "$PHP_BIN" 83 >/dev/null
+update-alternatives --set php "$PHP_BIN" >/dev/null
 php -r 'exit(version_compare(PHP_VERSION, "8.3.0", ">=") ? 0 : 1);' || die "PHP 8.3+ is required; detected $PHP_VERSION_ACTUAL"
 
 log "Installing Composer"
@@ -70,20 +98,29 @@ fi
 log "Enabling services"
 systemctl enable --now mariadb nginx "php${PHP_VERSION}-fpm" supervisor
 
-rand_secret(){ tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32; }
+# Generate a fixed-length password without a pipe that can SIGPIPE under pipefail.
+rand_secret(){ "$PHP_BIN" -r 'echo bin2hex(random_bytes(24));'; }
 DB_PASSWORD="$(rand_secret)"
 
 read -r -p "Company / application name [X-Link LTD]: " APP_NAME_INPUT || true
 APP_NAME_INPUT="${APP_NAME_INPUT:-X-Link LTD}"
 read -r -p "Primary domain [${DOMAIN}]: " DOMAIN_INPUT || true
 DOMAIN_INPUT="${DOMAIN_INPUT:-$DOMAIN}"
+valid_domain "$DOMAIN_INPUT" || die "Enter a valid domain name or IP address (letters, numbers, dots, and hyphens only)."
 DOMAIN="$DOMAIN_INPUT"
 read -r -p "Super Admin name [X-Link Super Admin]: " ADMIN_NAME || true
 ADMIN_NAME="${ADMIN_NAME:-X-Link Super Admin}"
 read -r -p "Super Admin email [admin@example.com]: " ADMIN_EMAIL || true
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@example.com}"
+"$PHP_BIN" -r 'exit(filter_var($argv[1], FILTER_VALIDATE_EMAIL) ? 0 : 1);' "$ADMIN_EMAIL" || die "Enter a valid Super Admin email address."
 read -r -s -p "Super Admin password (min 12 chars): " ADMIN_PASSWORD; echo
 [[ ${#ADMIN_PASSWORD} -ge 12 ]] || die "Admin password must be at least 12 characters."
+
+log "Checking that the database and dedicated user are new"
+DB_EXISTS="$(mysql --batch --skip-column-names -e "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='${DB_NAME}'")"
+[[ "$DB_EXISTS" == "0" ]] || die "Database ${DB_NAME} already exists. Choose a new DB_NAME to protect existing data."
+DB_USER_EXISTS="$(mysql --batch --skip-column-names -e "SELECT COUNT(*) FROM mysql.user WHERE User='${DB_USER}' AND Host='127.0.0.1'")"
+[[ "$DB_USER_EXISTS" == "0" ]] || die "Database user ${DB_USER}@127.0.0.1 already exists. Choose a new DB_USER."
 
 log "Creating database and dedicated database user"
 mysql <<SQL
@@ -113,7 +150,13 @@ set_env(){
   fi
 }
 
-set_env APP_NAME "\"$APP_NAME_INPUT\""
+set_env_quoted(){
+  local key="$1" raw="$2" quoted
+  quoted="$("$PHP_BIN" -r '$v=$argv[1]; $v=str_replace("\\", "\\\\", $v); $v=str_replace("\"", "\\\"", $v); $v=str_replace(["\r", "\n"], ["\\r", "\\n"], $v); echo "\"{$v}\"";' "$raw")"
+  set_env "$key" "$quoted"
+}
+
+set_env_quoted APP_NAME "$APP_NAME_INPUT"
 set_env APP_ENV production
 set_env APP_DEBUG false
 set_env APP_URL "http://${DOMAIN}:${BILLING_PORT}"
@@ -128,14 +171,17 @@ set_env SESSION_DRIVER database
 set_env SESSION_DOMAIN ".${DOMAIN}"
 set_env SESSION_COOKIE billing_session
 set_env QUEUE_CONNECTION database
-set_env SUPER_ADMIN_NAME "\"$ADMIN_NAME\""
+set_env_quoted SUPER_ADMIN_NAME "$ADMIN_NAME"
 set_env SUPER_ADMIN_EMAIL "$ADMIN_EMAIL"
-set_env SUPER_ADMIN_PASSWORD "\"$ADMIN_PASSWORD\""
+set_env_quoted SUPER_ADMIN_PASSWORD "$ADMIN_PASSWORD"
 set_env SANCTUM_STATEFUL_DOMAINS "${DOMAIN}:${BILLING_PORT},${DOMAIN}:${PORTAL_PORT},localhost,127.0.0.1"
 set_env TRUSTED_PROXIES "127.0.0.1"
+chown root:"$APP_USER" .env
+chmod 640 .env
 
 log "Installing PHP dependencies"
-composer install --no-dev --optimize-autoloader --no-interaction
+COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction
+COMPOSER_ALLOW_SUPERUSER=1 composer check-platform-reqs --no-dev
 
 log "Installing frontend dependencies and building assets"
 npm ci --no-audit --no-fund

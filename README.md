@@ -4,9 +4,9 @@
 
 ![Laravel](https://img.shields.io/badge/Laravel-12.x-FF2D20?style=for-the-badge&logo=laravel&logoColor=white)
 ![PHP](https://img.shields.io/badge/PHP-8.3%2B-777BB4?style=for-the-badge&logo=laravel&logoColor=white)
-![Filament](https://img.shields.io/badge/Filament-3.x-F59E0B?style=for-the-badge&logo=laravel&logoColor=white)
+![Filament](https://img.shields.io/badge/Filament-5.x-F59E0B?style=for-the-badge&logo=laravel&logoColor=white)
 ![MikroTik API](https://img.shields.io/badge/MikroTik-RouterOS%20API-000000?style=for-the-badge)
-![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
+![License](https://img.shields.io/badge/License-AGPL--3.0-blue?style=for-the-badge)
 
 A premium, modern Internet Service Provider (ISP) Billing & MikroTik RouterOS API management platform built on Laravel, Livewire, and Filament. It allows network administrators and resellers to seamlessly manage subscribers, PPPoE connections, hotspot vouchers, automated payment reconciliations, and commissions from a unified interface.
 
@@ -62,71 +62,69 @@ graph TD
 
 ## Getting Started
 
-### Prerequisites
-- PHP >= 8.3
-- Composer
-- Node.js (with npm or yarn)
-- MySQL / PostgreSQL
-- MikroTik RouterOS with API Service enabled (default port `8728` or SSL `8729`)
+### One-click server installation (recommended)
 
-### Installation Steps
+The OneClick installer is intended for a **fresh Ubuntu Server 22.04 or 24.04 LTS** machine. Run it as root or with sudo:
 
-1. **Clone the Repository**
-   ```bash
-   git clone https://github.com/MsVlogsm/ISP-Mikrotik-Billing-OneClick.git
-   cd ISP-Mikrotik-Billing-OneClick
-   ```
+    git clone --depth 1 https://github.com/MsVlogsm/ISP-Mikrotik-Billing-OneClick.git
+    cd ISP-Mikrotik-Billing-OneClick
+    sudo bash install.sh
 
-2. **Install Composer Dependencies**
-   ```bash
-   composer install
-   ```
+Optional installation settings can be supplied before running the installer:
 
-3. **Install Node Modules & Compile Assets**
-   ```bash
-   npm install
-   npm run build
-   ```
+    sudo env APP_DIR=/var/www/isp-billing DOMAIN=bill.example.com BILLING_PORT=8081 PORTAL_PORT=8082 DB_NAME=isp_billing DB_USER=isp_billing bash install.sh
 
-4. **Setup Environment Configuration**
-   Copy the example environment file and generate the application key:
-   ```bash
-   cp .env.example .env
-   php artisan key:generate
-   ```
+The installer prompts for the company name and Super Admin account, creates a dedicated database user, installs the PHP and Node dependencies, builds assets, runs migrations and seeders, and configures Nginx plus systemd queue/scheduler services. Generated database credentials are saved in /root/isp-billing-install-summary.txt with root-only permissions.
 
-5. **Configure Database & Router in `.env`**
-   Update your database credentials, mail settings, and security keys. Make sure to specify the local URL for IPNs:
-   ```env
-   DB_CONNECTION=mysql
-   DB_HOST=127.0.0.1
-   DB_PORT=3306
-   DB_DATABASE=mikrotik_billing
-   DB_USERNAME=root
-   DB_PASSWORD=
-   ```
+**Important safety notes**
+- This is a new-server installer, not an in-place updater. It refuses to run when an existing .env is found in the target application directory.
+- Do not point APP_DIR at an existing production installation. Back up and use a separate, tested deployment procedure for upgrades.
+- The installer configures HTTP on the billing and portal ports. It does not issue TLS certificates, change firewall policy, or configure MikroTik/OLT devices.
+- Make sure DNS points to the server and inbound access to the selected ports is allowed before testing the URLs.
 
-6. **Run Migrations & Seed Dummy/Setup Data**
-   ```bash
-   php artisan migrate --seed
-   ```
-   *Note: This creates basic roles, permissions, administrative profiles, and placeholder system configurations.*
+### Manual development installation
 
-7. **Start Development Environment**
-   You can run the full environment (web server, queue listener, and Vite assets compiler) using a single command:
-   ```bash
-   npm run dev
-   ```
+For local development or a manually managed environment:
 
----
+1. Clone the repository:
 
-## Task Scheduling (Cron Job)
+       git clone https://github.com/MsVlogsm/ISP-Mikrotik-Billing-OneClick.git
+       cd ISP-Mikrotik-Billing-OneClick
 
-To automate monthly billing generation, daily SMS alerts, user disabling, MikroTik logging, and background synchronization, configure a single cron entry on your server:
+2. Install PHP dependencies:
 
-```bash
-* * * * * cd /path-to-your-project && php artisan schedule:run >> /dev/null 2>&1
-```
+       composer install
+
+3. Install frontend dependencies and compile assets:
+
+       npm install
+       npm run build
+
+4. Configure the environment and generate the application key:
+
+       cp .env.example .env
+       php artisan key:generate
+
+5. Configure a MySQL database and update the database credentials in .env.
+
+6. Run migrations and seed setup data:
+
+       php artisan migrate --seed
+
+7. Start the local development environment:
+
+       npm run dev
+
+## Background processing and scheduled tasks
+
+The OneClick installer creates and enables dedicated systemd services for the Laravel queue worker and scheduler. Check them with:
+
+    systemctl status isp-billing-worker.service
+    systemctl status isp-billing-scheduler.service
+
+For manually managed installations that do not use the OneClick systemd services, configure a single cron entry to run the Laravel scheduler:
+
+    * * * * * cd /path-to-your-project && php artisan schedule:run >> /dev/null 2>&1
 
 ### Scheduled Tasks:
 - **Router Log Polling:** Runs every minute to pull log events from MikroTik.
@@ -194,7 +192,7 @@ The core libraries and packages keeping the platform running smoothly:
 
 ### Backend Architecture
 - **Framework:** Laravel 12.x
-- **Admin Panel:** Filament PHP v3
+- **Admin Panel:** Filament PHP v5
 - **Dynamic Frontend:** Livewire v4
 - **Router Connection:** [Evilfreelancer RouterOS API PHP Wrapper](https://github.com/evilfreelancer/routeros-api-php)
 - **Role Control:** [Spatie Laravel Permission](https://github.com/spatie/laravel-permission)

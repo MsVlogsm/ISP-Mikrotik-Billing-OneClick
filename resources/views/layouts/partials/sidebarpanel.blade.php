@@ -190,6 +190,7 @@
                     <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('broadband-customer-search') }}"><span class="nav-link-text ps-1">{{ __('Customer Search') }}</span></a></li>
                     <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('broadband-online-customers') }}"><span class="nav-link-text ps-1">{{ __('Online Customers') }}</span></a></li>
                     <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('broadband-due-customers') }}"><span class="nav-link-text ps-1">{{ __('Due Customers') }}</span></a></li>
+                    <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('broadband-paid-customers') }}"><span class="nav-link-text ps-1">{{ __('Paid Customers') }}</span></a></li>
                     <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('broadband-inactive-customers') }}"><span class="nav-link-text ps-1">{{ __('Inactive Customers') }}</span></a></li>
                     <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('broadband-new-customers') }}"><span class="nav-link-text ps-1">{{ __('New Customers') }}</span></a></li>
                     <li class="nav-item"><a wire:navigate.hover class="nav-link" href="{{ route('broadband-unverified-customers') }}"><span class="nav-link-text ps-1">{{ __('Unverified Customers') }}</span></a></li>
@@ -343,6 +344,9 @@
                     <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('high-usage-monitor') }}"><span class="nav-link-text ps-1">{{ __('High Usage Monitor') }}</span></a>
                     <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('device-watcher') }}"><span class="nav-link-text ps-1">{{ __('Device Watcher') }}</span></a>
                     <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('mikrotik-login-messages') }}"><span class="nav-link-text ps-1">{{ __('Logs & Alerts') }}</span></a>
+                    @if(auth()->user()->hasRole('Super Admin'))
+                        <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('system.sync-health') }}"><span class="nav-link-text ps-1">{{ __('Automation & Sync Health') }}</span></a>
+                    @endif
                 </div>
             </li>
             <li class="nav-item">
