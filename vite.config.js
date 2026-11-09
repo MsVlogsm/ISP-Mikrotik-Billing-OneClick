@@ -12,6 +12,7 @@ export default defineConfig({
                 'resources/sass/guest.scss',
                 'resources/js/main-site.js',
                 'resources/js/network-map.js',
+                'resources/js/network-map-public.js',
             ],
             refresh: true,
         }),

@@ -3,7 +3,7 @@
 <div align="center">
 
 ![Laravel](https://img.shields.io/badge/Laravel-12.x-FF2D20?style=for-the-badge&logo=laravel&logoColor=white)
-![PHP](https://img.shields.io/badge/PHP-8.3%2B-777BB4?style=for-the-badge&logo=laravel&logoColor=white)
+![PHP](https://img.shields.io/badge/PHP-8.4.1%2B-777BB4?style=for-the-badge&logo=laravel&logoColor=white)
 ![Filament](https://img.shields.io/badge/Filament-5.x-F59E0B?style=for-the-badge&logo=laravel&logoColor=white)
 ![MikroTik API](https://img.shields.io/badge/MikroTik-RouterOS%20API-000000?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-AGPL--3.0-blue?style=for-the-badge)
@@ -117,10 +117,14 @@ For local development or a manually managed environment:
 
 ## Background processing and scheduled tasks
 
-The OneClick installer creates and enables dedicated systemd services for the Laravel queue worker and scheduler. Check them with:
+The OneClick installer creates and enables dedicated systemd services for the Laravel queue worker, scheduler, and daily backup timer. It also configures a dedicated PHP-FPM pool under the selected application user, daily log rotation, and a root-only local backup of the database, `.env`, and `storage/app` with 14-day retention. Check them with:
 
     systemctl status isp-billing-worker.service
     systemctl status isp-billing-scheduler.service
+    systemctl status isp-billing-backup.timer
+    systemctl start isp-billing-backup.service
+
+Backups are stored under `/var/backups/isp-billing` with root-only permissions. They remain on the same server, so configure an off-site copy for disaster recovery. Laravel logs are rotated daily and retained for 14 rotations. The installer does not enable UFW or alter existing firewall rules; allow the selected billing and portal TCP ports using your approved firewall policy.
 
 For manually managed installations that do not use the OneClick systemd services, configure a single cron entry to run the Laravel scheduler:
 

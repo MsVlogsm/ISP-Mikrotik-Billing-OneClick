@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\BandwidthInvoice;
+use App\Models\BandwidthReseller;
 use App\Models\BillingInfo;
 use App\Models\CollectionSummary;
 use App\Models\CustomersInfo;
@@ -9,7 +11,9 @@ use App\Models\HotspotSale;
 use App\Models\PPPSecrets;
 use App\Models\Reseller;
 use App\Models\ResellerCommission;
+use App\Models\SalesQuery;
 use App\Models\SupportTicket;
+use App\Models\TeamAttendanceRecord;
 use App\Models\KycRequest;
 use App\Models\NotificationLogs;
 use App\Services\PrepaidBillingCycle;
@@ -206,6 +210,16 @@ class DashboardController extends Controller
             $onlineSessionSnapshot['successful_routers']
         )->count();
 
+        $telemetryRouterCount = (int) ($livePppTelemetry['router_count'] ?? 0);
+        $telemetrySuccessfulRouterCount = (int) ($livePppTelemetry['successful_routers'] ?? 0);
+        // Only derive a customer offline count from a complete router poll.
+        // Partial telemetry must never turn an unreachable router into false offline customers.
+        $offlineNow = $livePppSessions !== null
+            && $telemetryRouterCount > 0
+            && $telemetrySuccessfulRouterCount === $telemetryRouterCount
+                ? max(0, ($onlineCompany + $onlineReseller) - $onlineNow)
+                : null;
+
         // Expired means active accounts whose billing disable/expiry date has passed.
         $expired = BillingInfo::join('customers_infos', 'billing_infos.customer_bill_unique_id', '=', 'customers_infos.customer_unique_id')
             ->whereNull('customers_infos.deleted_at')
@@ -360,6 +374,13 @@ class DashboardController extends Controller
         $overdueTickets = SupportTicket::whereIn('status', $activeTicketStatuses)
             ->where('created_at', '<=', Carbon::now()->subDay())->count();
         $ticketsToday = SupportTicket::whereDate('created_at', $today)->count();
+        $openSalesLeadStatuses = ['new', 'contacted', 'follow_up', 'qualified'];
+        $openSalesLeads = SalesQuery::whereIn('status', $openSalesLeadStatuses)->count();
+        $salesFollowUpsDue = SalesQuery::whereIn('status', $openSalesLeadStatuses)
+            ->whereNotNull('follow_up_at')
+            ->where('follow_up_at', '<=', Carbon::now())
+            ->count();
+        $newSalesLeadsToday = SalesQuery::where('status', 'new')->whereDate('created_at', $today)->count();
         $pendingKyc = KycRequest::where('status', 'pending')->count();
         $kycApprovedMonth = KycRequest::where('status', 'reviewed')
             ->whereBetween('reviewed_at', [$monthStart, $monthEnd])->count();
@@ -380,6 +401,14 @@ class DashboardController extends Controller
             })->sum('collection_amount');
 
         $resellerDue = max(0, (float) Reseller::sum('balance'));
+        $bandwidthResellerDue = (float) BandwidthInvoice::query()
+            ->whereNotIn('status', ['paid', 'cancelled'])
+            ->whereColumn('total_amount', '>', 'paid_amount')
+            ->get(['total_amount', 'paid_amount'])
+            ->sum(fn ($invoice) => max(0, (float) $invoice->total_amount - (float) $invoice->paid_amount));
+        $bandwidthMonthlyCommitment = (float) BandwidthReseller::query()
+            ->where('status', 'active')
+            ->sum('monthly_due');
         $recentTransactions = CollectionSummary::with('customer')->latest('collection_date')->latest('id')->limit(8)->get();
         $newConnections = CustomersInfo::where('created_at', '>=', Carbon::now()->subMonths(11)->startOfMonth())
             ->get(['created_at'])
@@ -392,22 +421,31 @@ class DashboardController extends Controller
             ->whereNotNull('username')->distinct()->count('username');
         $hotspotCardStock = \App\Models\HotspotVoucher::whereIn('status', ['unused', 'active'])->count();
         $attendanceTotal = \App\Models\User::count();
-        $attendanceToday = 0;
+        $attendanceToday = TeamAttendanceRecord::query()
+            ->whereDate('attendance_date', $today)
+            ->whereNotNull('check_in_at')
+            ->distinct()
+            ->count('user_id');
+        $oltInventoryStats = \App\Models\NetworkInventoryDevice::type('olt')
+            ->selectRaw("COUNT(*) as total, SUM(CASE WHEN status = 'online' THEN 1 ELSE 0 END) as online, COALESCE(SUM(onu_total), 0) as onu_total, COALESCE(SUM(onu_online), 0) as onu_online")
+            ->first();
         $deviceStats = [
             'routers_total' => \App\Models\RouterList::count(),
             'routers_online' => \App\Models\RouterList::where('action', 'connected')->count(),
-            'olts_total' => (int) \App\Models\NetworkInventoryDevice::type('olt')->count(),
-            'olts_online' => (int) \App\Models\NetworkInventoryDevice::type('olt')->where('status','online')->count(),
+            'olts_total' => (int) ($oltInventoryStats->total ?? 0),
+            'olts_online' => (int) ($oltInventoryStats->online ?? 0),
+            'onus_total' => (int) ($oltInventoryStats->onu_total ?? 0),
+            'onus_online' => (int) ($oltInventoryStats->onu_online ?? 0),
             'aps_total' => (int) \App\Models\NetworkInventoryDevice::type('access-point')->count(),
             'aps_online' => (int) \App\Models\NetworkInventoryDevice::type('access-point')->where('status','online')->count(),
         ];
 
         return view('dashboard', compact(
             'results', 'customersData', 'billInformationData', 'systemOverview', 'resellerData',
-            'onlineNow', 'onlineCompany', 'onlineReseller', 'livePppSessions', 'livePppSessionsByRouter', 'livePppTelemetry', 'expired', 'lockedDisabled', 'runningDue', 'monthCollection', 'weekCollection',
-            'todayCollection', 'mfsCollection', 'resellerDue', 'activeCustomerTotal', 'activeCompany', 'activeReseller',
+            'onlineNow', 'offlineNow', 'onlineCompany', 'onlineReseller', 'livePppSessions', 'livePppSessionsByRouter', 'livePppTelemetry', 'expired', 'lockedDisabled', 'runningDue', 'monthCollection', 'weekCollection',
+            'todayCollection', 'mfsCollection', 'resellerDue', 'bandwidthResellerDue', 'bandwidthMonthlyCommitment', 'activeCustomerTotal', 'activeCompany', 'activeReseller',
             'billingToday', 'customersExpiringToday', 'customersExpiringTodayCount', 'autoDisableToday', 'autoDisableTodayCount', 'autoDisableResultsToday', 'autoDisableResultsTodayCount',
-            'openTickets', 'overdueTickets', 'ticketsToday', 'pendingKyc', 'kycApprovedMonth', 'mfsPending',
+            'openTickets', 'overdueTickets', 'ticketsToday', 'openSalesLeads', 'salesFollowUpsDue', 'newSalesLeadsToday', 'pendingKyc', 'kycApprovedMonth', 'mfsPending',
             'recentTransactions', 'newConnections', 'hotspotCustomers', 'hotspotCardStock', 'attendanceTotal', 'attendanceToday', 'deviceStats', 'monthCollectionPppoe', 'monthCollectionHotspot', 'todayPppoe', 'todayHotspot', 'weekPppoe', 'weekHotspot'
         ));
     }

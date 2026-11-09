@@ -120,19 +120,23 @@ class PaymentService
                 && (float) $billing->monthly_rent > 0
                 && $amount >= (float) $billing->monthly_rent;
 
-            // Prepaid expiry follows the connection-day anchor while retaining existing
-            // payment allocation, advance-month, and prorated-validity rules.
+            // Use the same balance-to-validity calculation as manual collections.
+            // The resulting credit is preserved, so multiple prepaid months are not lost.
             if ($billing->billing_type === 'prepaid' && ! $isProratedApplied) {
                 $cycleAnchor = $customer->connection_date ?: ($billing->auto_disable_date ?: today()->toDateString());
-                $expiryToAlign = $expireDate ?: ($billing->auto_disable_date ?: today()->toDateString());
-                $alignedExpiry = PrepaidBillingCycle::alignToConnectionDay($cycleAnchor, $expiryToAlign);
+                $newDue = round($currentDue - $amount, 2);
+                $advancePaid = max(0, -$newDue);
 
-                // Never reactivate a prepaid customer with an expiry still in the past.
-                // Preserve old-due accounting, but start the paid validity at the next connection day.
-                if (($newDue <= 0 || $allowPartialActivation || $prepaidRentPaid) && $alignedExpiry->lte(today())) {
-                    $expireDate = PrepaidBillingCycle::nextExpiryDate($cycleAnchor, today())->toDateString();
-                } else {
-                    $expireDate = $alignedExpiry->toDateString();
+                $calculatedExpiry = PrepaidBillingCycle::expiryAfterPayment(
+                    $cycleAnchor,
+                    $billing->auto_disable_date,
+                    $currentDue,
+                    $amount,
+                    (float) $billing->monthly_rent
+                );
+
+                if ($calculatedExpiry) {
+                    $expireDate = $calculatedExpiry->toDateString();
                 }
             }
 
@@ -314,6 +318,24 @@ class PaymentService
             }
 
             DB::commit();
+
+            // Deliver the successful payment event only after the billing transaction commits.
+            try {
+                app(\App\Services\IntegrationWebhookDispatcher::class)->dispatch('payment.received', [
+                    'customer_id' => $customer->customer_unique_id,
+                    'amount' => $amount,
+                    'method' => $gateway,
+                    'transaction_id' => $trxId,
+                    'invoice_no' => $invoiceNo,
+                    'paid_at' => now()->toIso8601String(),
+                ]);
+            } catch (\Throwable $webhookError) {
+                Log::warning('Payment committed but webhook event could not be queued.', [
+                    'customer_id' => $customer->customer_unique_id,
+                    'transaction_id' => $trxId,
+                    'error' => $webhookError->getMessage(),
+                ]);
+            }
 
             // Fire reseller commission event
             event(new PackagePurchased($customer, $amount));

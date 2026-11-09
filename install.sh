@@ -9,7 +9,7 @@ BILLING_PORT="${BILLING_PORT:-8081}"
 PORTAL_PORT="${PORTAL_PORT:-8082}"
 DB_NAME="${DB_NAME:-isp_billing}"
 DB_USER="${DB_USER:-isp_billing}"
-PHP_VERSION="8.3"
+PHP_VERSION="8.4"
 NODE_MAJOR="22"
 
 log(){ printf '\n[ONE-CLICK] %s\n' "$*"; }
@@ -26,6 +26,15 @@ case "${VERSION_ID:-}" in 22.04|24.04) ;; *) die "Supported Ubuntu versions: 22.
 [[ "$DB_NAME" =~ ^[A-Za-z0-9_]{1,64}$ ]] || die "DB_NAME may contain only letters, numbers, and underscores (max 64 characters)."
 [[ "$DB_USER" =~ ^[A-Za-z0-9_]{1,32}$ ]] || die "DB_USER may contain only letters, numbers, and underscores (max 32 characters)."
 [[ "$APP_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "APP_USER must be a valid Linux account name."
+
+# Keep the PHP-FPM pool, queue worker and scheduler on the same dedicated account.
+if ! getent group "$APP_USER" >/dev/null; then
+  groupadd --system "$APP_USER"
+fi
+if ! id -u "$APP_USER" >/dev/null 2>&1; then
+  useradd --system --gid "$APP_USER" --home-dir "$APP_DIR" --shell /usr/sbin/nologin "$APP_USER"
+fi
+[[ "$(id -gn "$APP_USER")" == "$APP_USER" ]] || die "APP_USER must use a matching primary group named $APP_USER."
 
 valid_port() {
   [[ "$1" =~ ^[0-9]{1,5}$ ]] || return 1
@@ -78,9 +87,9 @@ else
 fi
 
 PHP_VERSION_ACTUAL="$($PHP_BIN -r 'echo PHP_VERSION;')"
-update-alternatives --install /usr/bin/php php "$PHP_BIN" 83 >/dev/null
+update-alternatives --install /usr/bin/php php "$PHP_BIN" 84 >/dev/null
 update-alternatives --set php "$PHP_BIN" >/dev/null
-php -r 'exit(version_compare(PHP_VERSION, "8.3.0", ">=") ? 0 : 1);' || die "PHP 8.3+ is required; detected $PHP_VERSION_ACTUAL"
+php -r 'exit(version_compare(PHP_VERSION, "8.4.1", ">=") ? 0 : 1);' || die "PHP 8.4.1+ is required; detected $PHP_VERSION_ACTUAL"
 
 log "Installing Composer"
 if ! command -v composer >/dev/null 2>&1; then
@@ -130,6 +139,17 @@ ALTER USER '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
 GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
+
+# The backup client file is root-only and separate from the web-readable .env.
+install -d -m 700 /etc/isp-billing
+cat > /etc/isp-billing/backup.cnf <<DBCONF
+[client]
+user=${DB_USER}
+password=${DB_PASSWORD}
+host=127.0.0.1
+port=3306
+DBCONF
+chmod 600 /etc/isp-billing/backup.cnf
 
 log "Preparing application"
 cd "$APP_DIR"
@@ -205,6 +225,26 @@ log "Setting runtime permissions"
 chown -R "$APP_USER":"$APP_USER" storage bootstrap/cache
 chmod -R ug+rwX storage bootstrap/cache
 
+log "Configuring dedicated PHP-FPM pool"
+cat > "/etc/php/${PHP_VERSION}/fpm/pool.d/isp-billing.conf" <<POOL
+[isp-billing]
+user = ${APP_USER}
+group = ${APP_USER}
+listen = /run/php/php${PHP_VERSION}-fpm-isp-billing.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+pm = dynamic
+pm.max_children = 10
+pm.start_servers = 2
+pm.min_spare_servers = 1
+pm.max_spare_servers = 3
+pm.max_requests = 500
+catch_workers_output = yes
+POOL
+php-fpm${PHP_VERSION} -t
+systemctl reload "php${PHP_VERSION}-fpm"
+
 log "Configuring Nginx on ports ${BILLING_PORT}/${PORTAL_PORT}"
 cat > /etc/nginx/sites-available/isp-billing <<NGINX
 server {
@@ -217,7 +257,7 @@ server {
     location ~ \.php$ {
         include snippets/fastcgi-php.conf;
         fastcgi_param HTTP_X_FORWARDED_PORT ${BILLING_PORT};
-        fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm.sock;
+        fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-isp-billing.sock;
     }
     location ~ /\. { deny all; }
 }
@@ -231,7 +271,7 @@ server {
     location ~ \.php$ {
         include snippets/fastcgi-php.conf;
         fastcgi_param HTTP_X_FORWARDED_PORT ${PORTAL_PORT};
-        fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm.sock;
+        fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-isp-billing.sock;
     }
     location ~ /\. { deny all; }
 }
@@ -241,6 +281,69 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl reload nginx
 
+log "Configuring Laravel log rotation"
+cat > /etc/logrotate.d/isp-billing <<LOGROTATE
+"${APP_DIR}/storage/logs/laravel.log" "${APP_DIR}/storage/logs/laravel-*.log" {
+    daily
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su ${APP_USER} ${APP_USER}
+}
+LOGROTATE
+logrotate -d /etc/logrotate.d/isp-billing >/dev/null
+
+log "Configuring protected daily database and application-data backups"
+printf '#!/usr/bin/env bash\nset -Eeuo pipefail\nDB_NAME=%q\nAPP_DIR=%q\n' "$DB_NAME" "$APP_DIR" > /usr/local/sbin/isp-billing-db-backup
+cat >> /usr/local/sbin/isp-billing-db-backup <<'BACKUP'
+BACKUP_DIR="/var/backups/isp-billing"
+MYSQL_CNF="/etc/isp-billing/backup.cnf"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$"
+mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
+DB_TMP="$(mktemp "$BACKUP_DIR/.${DB_NAME}-${STAMP}.sql.gz.XXXXXX")"
+FILES_TMP="$(mktemp "$BACKUP_DIR/.${DB_NAME}-files-${STAMP}.tar.gz.XXXXXX")"
+cleanup() { rm -f "$DB_TMP" "$FILES_TMP"; }
+trap cleanup EXIT
+mysqldump --defaults-extra-file="$MYSQL_CNF" --single-transaction --routines --triggers --events --hex-blob --default-character-set=utf8mb4 "$DB_NAME" | gzip -c > "$DB_TMP"
+tar -C "$APP_DIR" -czf "$FILES_TMP" .env storage/app
+test -s "$DB_TMP" && test -s "$FILES_TMP"
+chmod 600 "$DB_TMP" "$FILES_TMP"
+mv "$DB_TMP" "$BACKUP_DIR/${DB_NAME}-${STAMP}.sql.gz"
+mv "$FILES_TMP" "$BACKUP_DIR/${DB_NAME}-files-${STAMP}.tar.gz"
+find "$BACKUP_DIR" -maxdepth 1 -type f \( -name "${DB_NAME}-*.sql.gz" -o -name "${DB_NAME}-files-*.tar.gz" \) -mtime +14 -delete
+trap - EXIT
+BACKUP
+chmod 750 /usr/local/sbin/isp-billing-db-backup
+
+cat > /etc/systemd/system/isp-billing-backup.service <<SERVICE
+[Unit]
+Description=ISP Billing Database and Application Data Backup
+After=mariadb.service
+Requires=mariadb.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/isp-billing-db-backup
+SERVICE
+
+cat > /etc/systemd/system/isp-billing-backup.timer <<TIMER
+[Unit]
+Description=Daily ISP Billing Backup
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 Asia/Dhaka
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target
+TIMER
+systemd-analyze calendar '*-*-* 02:15:00 Asia/Dhaka' >/dev/null
+
 log "Configuring queue worker"
 cat > /etc/systemd/system/isp-billing-worker.service <<SERVICE
 [Unit]
@@ -249,8 +352,8 @@ After=network.target mariadb.service
 
 [Service]
 Type=simple
-User=www-data
-Group=www-data
+User=${APP_USER}
+Group=${APP_USER}
 WorkingDirectory=${APP_DIR}
 ExecStart=/usr/bin/php${PHP_VERSION} artisan queue:work --sleep=3 --tries=3 --timeout=120
 Restart=always
@@ -268,8 +371,8 @@ After=network.target mariadb.service
 
 [Service]
 Type=simple
-User=www-data
-Group=www-data
+User=${APP_USER}
+Group=${APP_USER}
 WorkingDirectory=${APP_DIR}
 ExecStart=/usr/bin/php${PHP_VERSION} artisan schedule:work
 Restart=always
@@ -280,7 +383,8 @@ WantedBy=multi-user.target
 SERVICE
 
 systemctl daemon-reload
-systemctl enable --now isp-billing-worker.service isp-billing-scheduler.service
+systemctl enable --now isp-billing-worker.service isp-billing-scheduler.service isp-billing-backup.timer
+systemctl start isp-billing-backup.service
 
 log "Running health checks"
 systemctl is-active --quiet mariadb || die "MariaDB is not active"
@@ -288,6 +392,9 @@ systemctl is-active --quiet nginx || die "Nginx is not active"
 systemctl is-active --quiet "php${PHP_VERSION}-fpm" || die "PHP-FPM is not active"
 systemctl is-active --quiet isp-billing-worker.service || die "Queue worker is not active"
 systemctl is-active --quiet isp-billing-scheduler.service || die "Scheduler is not active"
+systemctl is-active --quiet isp-billing-backup.timer || die "Backup timer is not active"
+compgen -G "/var/backups/isp-billing/${DB_NAME}-*.sql.gz" >/dev/null || die "Initial database backup was not created"
+compgen -G "/var/backups/isp-billing/${DB_NAME}-files-*.tar.gz" >/dev/null || die "Initial application-data backup was not created"
 curl -fsS "http://127.0.0.1:${BILLING_PORT}/up" >/dev/null || die "Billing health endpoint failed"
 curl -fsS "http://127.0.0.1:${PORTAL_PORT}/up" >/dev/null || die "Portal health endpoint failed"
 
@@ -302,11 +409,16 @@ Database: ${DB_NAME}
 Database user: ${DB_USER}
 Database password: ${DB_PASSWORD}
 Super Admin email: ${ADMIN_EMAIL}
+Daily database backup: /var/backups/isp-billing (14-day local retention)
+Application data backup: .env and storage/app (root-only archive)
+Log rotation: daily, 14 retained rotations
 
 Production safety:
 - This installer configures the application server only.
 - It does not provision MikroTik/OLT devices, change customer network configuration, or reboot network equipment.
 - Router/device credentials remain application configuration and are not generated by this installer.
+- Firewall policy is intentionally unchanged; allow only the required TCP ports (${BILLING_PORT}, ${PORTAL_PORT}) through your approved firewall.
+- Backups are local to this server; configure a separate off-site copy for disaster recovery.
 SUMMARY
 chmod 600 /root/isp-billing-install-summary.txt
 
