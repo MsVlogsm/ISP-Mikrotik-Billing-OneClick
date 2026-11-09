@@ -35,6 +35,7 @@ class PaymentSummary extends Model
     public function monthlyCollections()
     {
         return $this->collections()
+            ->where(function ($query) { $query->whereNull('payment_type')->orWhere('payment_type', '<>', 'advance'); })
             ->whereMonth('collection_date', $this->summary_date->month)
             ->whereYear('collection_date', $this->summary_date->year);
     }
@@ -42,6 +43,7 @@ class PaymentSummary extends Model
     public function getPaidAmountAttribute(): float
     {
         return $this->collections()
+            ->where(function ($query) { $query->whereNull('payment_type')->orWhere('payment_type', '<>', 'advance'); })
             ->whereMonth('collection_date', $this->summary_date->month)
             ->whereYear('collection_date', $this->summary_date->year)
             ->sum('collection_amount');

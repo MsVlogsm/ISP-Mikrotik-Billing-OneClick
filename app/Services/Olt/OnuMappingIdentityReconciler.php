@@ -8,7 +8,7 @@ class OnuMappingIdentityReconciler
 {
     public function plan(array $liveOnus, iterable $mappings): array
     {
-        $liveByMac = [];
+        $liveRowsByMac = [];
         $liveById = [];
         foreach ($liveOnus as $row) {
             $onuId = trim((string) ($row['onu_id'] ?? ''));
@@ -17,26 +17,70 @@ class OnuMappingIdentityReconciler
             if ($onuId === '' || $mac === null || $pon === '') {
                 throw new InvalidArgumentException('Live ONU data is missing a valid ONU ID, MAC, or PON port.');
             }
-            if (isset($liveByMac[$mac])) throw new InvalidArgumentException("Live SNMP returned duplicate ONU MAC {$mac}.");
-            if (isset($liveById[$onuId])) throw new InvalidArgumentException("Live SNMP returned duplicate ONU ID {$onuId}.");
+            $identityKey = $pon.'|'.$onuId;
+            if (isset($liveById[$identityKey])) throw new InvalidArgumentException("Live SNMP returned duplicate PON/ONU identity {$identityKey}.");
             $row['onu_id'] = $onuId;
             $row['pon_port'] = $pon;
             $row['onu_mac'] = $mac;
             $status = strtolower(trim((string) ($row['status'] ?? 'unknown')));
             $row['status'] = in_array($status, ['online', 'offline'], true) ? $status : 'unknown';
-            $liveByMac[$mac] = $row;
-            $liveById[$onuId] = true;
+            $liveRowsByMac[$mac][] = $row;
+            $liveById[$identityKey] = true;
         }
-        if (!$liveByMac) throw new InvalidArgumentException('Live SNMP returned no valid ONU identities.');
+        $liveByMac = [];
+        $ambiguousLive = [];
+        foreach ($liveRowsByMac as $mac => $group) {
+            if (count($group) > 1) {
+                $ambiguousLive[$mac] = $group;
+                continue;
+            }
+            $liveByMac[$mac] = $group[0];
+        }
+        if (!$liveByMac && !$ambiguousLive) throw new InvalidArgumentException('Live SNMP returned no valid ONU identities.');
 
         $mappingByMac = [];
+        $mappingBySlot = [];
         $stale = [];
+        $archived = [];
+        $ambiguous = [];
+        $ambiguousNew = [];
         $blockers = [];
         foreach ($mappings as $mapping) {
             $data = is_array($mapping) ? $mapping : $mapping->getAttributes();
             $mac = self::normalizeMac($data['onu_mac'] ?? null);
             $rowId = (int) ($data['id'] ?? 0);
             if ($rowId <= 0) throw new InvalidArgumentException('Stored ONU mapping has no primary key.');
+            $slotKey = trim((string) ($data['pon_port'] ?? '')).'|'.trim((string) ($data['onu_id'] ?? ''));
+            if ($slotKey !== '|') {
+                if (isset($mappingBySlot[$slotKey])) {
+                    throw new InvalidArgumentException("Stored duplicate PON/ONU identity {$slotKey}.");
+                }
+                $mappingBySlot[$slotKey] = $data;
+            }
+            if (str_starts_with((string) ($data['onu_id'] ?? ''), '__stale_')) {
+                $archived[] = [
+                    'mapping_id' => $rowId,
+                    'current_pon_port' => (string) ($data['pon_port'] ?? ''),
+                    'current_onu_id' => (string) ($data['onu_id'] ?? ''),
+                    'onu_mac' => $mac,
+                    'linked' => !empty($data['customer_id']) || !empty($data['ppp_user_id']),
+                ];
+                continue;
+            }
+            if ($mac !== null && isset($ambiguousLive[$mac])) {
+                $ambiguous[] = [
+                    'mapping_id' => $rowId,
+                    'current_pon_port' => (string) ($data['pon_port'] ?? ''),
+                    'current_onu_id' => (string) ($data['onu_id'] ?? ''),
+                    'onu_mac' => $mac,
+                    'linked' => !empty($data['customer_id']) || !empty($data['ppp_user_id']),
+                    'live_locations' => array_map(
+                        static fn ($row) => ['pon_port' => $row['pon_port'], 'onu_id' => $row['onu_id'], 'status' => $row['status']],
+                        $ambiguousLive[$mac]
+                    ),
+                ];
+                continue;
+            }
             if ($mac !== null && isset($liveByMac[$mac])) {
                 if (isset($mappingByMac[$mac])) throw new InvalidArgumentException("Stored ONU MAC {$mac} occurs in multiple mapping rows.");
                 $mappingByMac[$mac] = $data;
@@ -48,6 +92,26 @@ class OnuMappingIdentityReconciler
             // or PPPoE account is attached; manual identity review is required.
             if ($linked) {
                 $blockers[] = "Stale mapping row {$rowId} has a customer/PPPoE link; verify its live identity before applying reconciliation.";
+            }
+        }
+
+        foreach ($ambiguousLive as $mac => $group) {
+            foreach ($group as $live) {
+                $slotKey = $live['pon_port'].'|'.$live['onu_id'];
+                $storedAtSlot = $mappingBySlot[$slotKey] ?? null;
+                if ($storedAtSlot) {
+                    $storedMac = self::normalizeMac($storedAtSlot['onu_mac'] ?? null);
+                    if ($storedMac !== $mac) {
+                        $blockers[] = "Live ambiguous MAC {$mac} targets {$slotKey}, but a different stored ONU identity occupies that slot.";
+                    }
+                    continue;
+                }
+                $ambiguousNew[] = [
+                    'onu_id' => $live['onu_id'],
+                    'onu_mac' => $mac,
+                    'pon_port' => $live['pon_port'],
+                    'status' => $live['status'],
+                ];
             }
         }
 
@@ -74,14 +138,37 @@ class OnuMappingIdentityReconciler
             }
         }
         $targetIds = [];
-        foreach (array_merge(
-            array_map(static fn ($r) => (string) $r['target_onu_id'], $matched),
-            array_map(static fn ($r) => (string) $r['onu_id'], $new)
-        ) as $id) {
-            if (isset($targetIds[$id])) throw new InvalidArgumentException("Duplicate live target ONU ID {$id}.");
-            $targetIds[$id] = true;
+        $targetRows = array_merge(
+            array_map(static fn ($r) => [(string) $r['pon_port'], (string) $r['target_onu_id']], $matched),
+            array_map(static fn ($r) => [(string) $r['pon_port'], (string) $r['onu_id']], $new)
+        );
+        foreach ($targetRows as [$pon, $id]) {
+            $identityKey = trim($pon).'|'.trim($id);
+            if (isset($targetIds[$identityKey])) throw new InvalidArgumentException("Duplicate live target PON/ONU identity {$identityKey}.");
+            $targetIds[$identityKey] = true;
         }
-        return ['matched' => $matched, 'stale' => $stale, 'new' => $new, 'blockers' => $blockers];
+        foreach ($ambiguous as $row) {
+            $heldKey = trim($row['current_pon_port']).'|'.trim($row['current_onu_id']);
+            if (isset($targetIds[$heldKey])) {
+                $blockers[] = "Ambiguous MAC {$row['onu_mac']} is still stored at {$heldKey}, which is also a live target; no changes can be applied until this slot is manually resolved.";
+            }
+        }
+        foreach ($ambiguousNew as $row) {
+            $identityKey = trim($row['pon_port']).'|'.trim($row['onu_id']);
+            if (isset($targetIds[$identityKey])) {
+                $blockers[] = "Ambiguous inventory target {$identityKey} conflicts with a unique-MAC target.";
+            }
+            $targetIds[$identityKey] = true;
+        }
+        return [
+            'matched' => $matched,
+            'stale' => $stale,
+            'archived' => $archived,
+            'new' => $new,
+            'ambiguous' => $ambiguous,
+            'ambiguous_new' => $ambiguousNew,
+            'blockers' => $blockers,
+        ];
     }
 
     public static function normalizeMac(mixed $value): ?string

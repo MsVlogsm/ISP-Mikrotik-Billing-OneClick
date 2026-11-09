@@ -3,7 +3,10 @@
 namespace App\Http\Controllers\Payment;
 
 use App\Http\Controllers\Controller;
+use App\Models\CustomersInfo;
+use App\Models\PaymentGatewayAttempt;
 use App\Services\PaymentService;
+use Illuminate\Support\Str;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -57,8 +60,8 @@ class NagadPaymentController extends Controller
 
         $config = $this->getNagadConfig();
 
-        // Check if Nagad private/public keys are defined. If not, fallback to Simulator/Mock for sandbox testing.
-        if (empty($config['private_key']) || empty($config['public_key'])) {
+        // Production payment credentials must use HTTPS; never send merchant keys over plain HTTP.
+        if (empty($config['private_key']) || empty($config['public_key']) || ! str_starts_with((string) $config['base_url'], 'https://')) {
             if ($isLocal) {
                 return response()->view('payment.mock_checkout', [
                     'gateway' => 'Nagad',
@@ -72,9 +75,20 @@ class NagadPaymentController extends Controller
                 ->with('error', 'Nagad is not properly configured (keys are missing).');
         }
 
+        $merchantId = $config['merchant_id'];
+        $orderId = 'XLK'.Str::upper(Str::random(16));
+        $attempt = PaymentGatewayAttempt::create([
+            'gateway' => 'nagad',
+            'customer_unique_id' => $customer->customer_unique_id,
+            'amount' => round((float) $amount, 2),
+            'currency' => 'BDT',
+            'merchant_reference' => $orderId,
+            'status' => 'initiated',
+            'expires_at' => now()->addDay(),
+            'next_poll_at' => now()->addMinute(),
+        ]);
+
         try {
-            $merchantId = $config['merchant_id'];
-            $orderId = 'NGD_'.uniqid();
             $dateTime = now()->format('YmdHis');
 
             // 1. Initial Step: Post to payment-initializer (plaintext parameters)
@@ -107,6 +121,13 @@ class NagadPaymentController extends Controller
                 if (!$paymentRefId || !$challenge) {
                     throw new \Exception('paymentReferenceId or challenge missing in decrypted initialization data.');
                 }
+
+                $attempt->forceFill([
+                    'provider_reference' => (string) $paymentRefId,
+                    'status' => 'pending',
+                    'next_poll_at' => now()->addMinute(),
+                    'provider_metadata' => ['order_id' => $orderId],
+                ])->save();
 
                 // 2. Complete Step: Prepare sensitive payload for quick-pay-initializer
                 $sensitivePayload = [
@@ -153,6 +174,7 @@ class NagadPaymentController extends Controller
                     $decryptedCompleteJson = json_decode($decryptedComplete, true);
 
                     if (isset($decryptedCompleteJson['callBackUrl'])) {
+                        session(['nagad_attempt_uuid' => $attempt->attempt_uuid]);
                         return redirect()->away($decryptedCompleteJson['callBackUrl']);
                     }
                     
@@ -162,6 +184,12 @@ class NagadPaymentController extends Controller
                 $errorMessage = $completeRes['message'] ?? 'Failed to initialize quick pay session.';
                 throw new \Exception($errorMessage);
             }
+
+            $attempt->forceFill([
+                'status' => 'failed',
+                'next_poll_at' => null,
+                'last_error' => 'Nagad rejected the payment initialization request.',
+            ])->save();
 
             Log::error('Nagad session initiation failed: '.json_encode($res));
 
@@ -178,6 +206,15 @@ class NagadPaymentController extends Controller
                 ->with('error', 'Nagad session creation failed. Please try again.');
 
         } catch (\Exception $e) {
+            $attempt->refresh();
+            $attempt->forceFill([
+                'status' => $attempt->provider_reference ? 'pending' : 'needs_review',
+                'next_poll_at' => $attempt->provider_reference ? now()->addMinute() : null,
+                'last_error' => $attempt->provider_reference
+                    ? 'Checkout redirect step failed; provider payment reference retained for status polling.'
+                    : 'Nagad checkout initiation did not produce a queryable provider reference.',
+            ])->save();
+
             Log::error('Nagad initiate exception: '.$e->getMessage());
 
             if ($isLocal) {
@@ -199,9 +236,24 @@ class NagadPaymentController extends Controller
         // Nagad callback parameters
         $status = $request->query('status');
         $orderId = $request->query('order_id');
-        $paymentRefId = $request->query('payment_ref_id');
+        $paymentRefId = trim((string) $request->query('payment_ref_id', ''));
+        $attempt = $paymentRefId !== ''
+            ? PaymentGatewayAttempt::query()->where('gateway', 'nagad')->where('provider_reference', $paymentRefId)->first()
+            : null;
+        if (! $attempt && session('nagad_attempt_uuid')) {
+            $attempt = PaymentGatewayAttempt::query()
+                ->where('attempt_uuid', session('nagad_attempt_uuid'))
+                ->where('gateway', 'nagad')
+                ->first();
+        }
+        if (! $attempt && $orderId) {
+            $attempt = PaymentGatewayAttempt::query()
+                ->where('gateway', 'nagad')
+                ->where('merchant_reference', (string) $orderId)
+                ->first();
+        }
 
-        if ($status === 'success') {
+        if ($status === 'success' && $paymentRefId !== '') {
             try {
                 $config = $this->getNagadConfig();
                 $verify = Http::withHeaders([
@@ -214,15 +266,35 @@ class NagadPaymentController extends Controller
 
                 if (isset($res['sensitiveData'])) {
                     $decryptedVerify = $this->decrypt($res['sensitiveData'], $config['private_key']);
-                    if ($decryptedVerify) {
+                    if ($decryptedVerify
+                        && ! empty($res['signature'])
+                        && $this->verifySignature($decryptedVerify, (string) $res['signature'], $config['public_key'])) {
                         $decryptedVerifyJson = json_decode($decryptedVerify, true);
 
-                        if (isset($decryptedVerifyJson['status']) && $decryptedVerifyJson['status'] === 'Success') {
-                            $amount = (float) $decryptedVerifyJson['amount'];
-                            $customer = auth()->user() ? auth()->user()->customer : null;
+                        if (is_array($decryptedVerifyJson)
+                            && strtolower((string) ($decryptedVerifyJson['status'] ?? '')) === 'success') {
+                            $amount = is_numeric($decryptedVerifyJson['amount'] ?? null) ? (float) $decryptedVerifyJson['amount'] : 0.0;
+                            $responseOrderId = (string) ($decryptedVerifyJson['orderId'] ?? '');
+                            $customer = $attempt
+                                ? CustomersInfo::where('customer_unique_id', $attempt->customer_unique_id)->first()
+                                : (auth()->user() ? auth()->user()->customer : null);
 
-                            if ($customer) {
-                                $this->paymentService->processSuccessPayment($customer, $amount, 'nagad', $paymentRefId);
+                            $attemptMatches = ! $attempt || (
+                                abs($amount - (float) $attempt->amount) <= 0.009
+                                && $responseOrderId !== ''
+                                && hash_equals((string) $attempt->merchant_reference, $responseOrderId)
+                                && ($attempt->provider_reference === null || hash_equals((string) $attempt->provider_reference, $paymentRefId))
+                            );
+
+                            if ($customer && $attemptMatches && $amount > 0) {
+                                $providerTrxId = (string) ($decryptedVerifyJson['issuerPaymentRefNo'] ?? $paymentRefId);
+                                $metadata = $attempt ? [
+                                    'source' => 'nagad_callback',
+                                    'payment_attempt_id' => $attempt->id,
+                                    'external_invoice_id' => $attempt->merchant_reference,
+                                    'verified_gateway_callback' => true,
+                                ] : [];
+                                $this->paymentService->processSuccessPayment($customer, $amount, 'nagad', $providerTrxId, $metadata);
 
                                 return redirect()->route('filament.portal.pages.dashboard')
                                     ->with('success', 'Payment of BDT '.$amount.' received successfully via Nagad. Your account is active.');
@@ -231,7 +303,18 @@ class NagadPaymentController extends Controller
                     }
                 }
 
-                Log::error('Nagad validation failed: '.json_encode($res));
+                if ($attempt && $attempt->status !== 'paid') {
+                    $attempt->forceFill([
+                        'status' => 'needs_review',
+                        'next_poll_at' => null,
+                        'last_error' => 'Nagad callback did not pass response signature, status, amount, or order matching.',
+                    ])->save();
+                }
+
+                Log::warning('Nagad validation did not match a verified payment.', [
+                    'attempt_id' => $attempt?->id,
+                    'provider_status_present' => isset($res['sensitiveData']),
+                ]);
 
                 return redirect()->route('filament.portal.pages.pay-bill')
                     ->with('error', 'Nagad verification failed.');
@@ -244,8 +327,24 @@ class NagadPaymentController extends Controller
             }
         }
 
+        if ($attempt && $attempt->status !== 'paid') {
+            $attempt->forceFill([
+                'status' => 'cancelled',
+                'next_poll_at' => null,
+                'last_error' => 'Customer returned from Nagad without a successful payment callback.',
+            ])->save();
+        }
+
         return redirect()->route('filament.portal.pages.pay-bill')
             ->with('error', 'Payment failed or cancelled. Status: '.$status);
+    }
+
+    private function verifySignature(string $plainText, string $signature, string $publicKey): bool
+    {
+        $decodedSignature = base64_decode($signature, true);
+
+        return $decodedSignature !== false
+            && openssl_verify($plainText, $decodedSignature, $this->cleanPublicKey($publicKey), OPENSSL_ALGO_SHA256) === 1;
     }
 
     private function cleanPrivateKey($key)

@@ -1,6 +1,22 @@
 <x-app-layout>
 @push('styles')<link rel="stylesheet" href="{{ asset('xlink-olt/olt-source.css') }}">@endpush
 <div class="container-fluid px-1"><div class="d-flex justify-content-between align-items-center mb-3"><div><span class="text-uppercase small text-muted fw-semibold">Admin Panel</span><h3 class="mb-0">{{ $edit ? 'Edit OLT' : 'Add OLT' }}</h3><small class="text-muted">{{ $edit ? 'Update OLT connection and hardware configuration' : 'Configure a new Optical Line Terminal' }}</small></div><a class="btn btn-outline-secondary" href="{{ route('network-inventory.olt') }}">Back to OLT</a></div>
+@if($edit)
+<div class="card shadow-sm border-0 mt-3">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+      <div><h5 class="mb-1">Privileged CLI Access</h5><p class="small text-muted mb-0">Save only the separate OLT CLI enable password. It is encrypted before storage and never displayed again.</p></div>
+      @if(filled($device->getRawOriginal('enable_password')))<span class="badge bg-success">Password stored (encrypted)</span>@else<span class="badge bg-warning text-dark">Password not stored</span>@endif
+    </div>
+    @if(session('enable_password_saved_success'))<div class="alert alert-success py-2">{{ session('enable_password_saved_success') }}</div>@endif
+    <form method="POST" action="{{ route('network-inventory.olt.enable-password', $device) }}" class="row g-2 align-items-end">
+      @csrf
+      <div class="col-md-8"><label class="form-label" for="olt-enable-password">CLI Enable Password</label><input id="olt-enable-password" class="form-control" type="password" name="enable_password" autocomplete="new-password" maxlength="128" required placeholder="Enter the OLT enable password"><div class="form-text">This is not the SSH login password. Leave the main OLT form separate and unchanged.</div></div>
+      <div class="col-md-4"><button class="btn btn-primary w-100" type="submit">Save CLI Enable Password</button></div>
+    </form>
+  </div>
+</div>
+@endif
 <div class="card shadow-sm border-0"><form method="POST" action="{{ $edit ? route('network-inventory.olt.update',$device) : route('network-inventory.olt.store') }}">@csrf @if($edit) @method('PUT') @endif
 <div class="card-body"><div class="row g-3">
 <div class="col-md-4"><label class="form-label">OLT Name</label><input class="form-control" name="name" value="{{ old('name',$device->name) }}" required></div>

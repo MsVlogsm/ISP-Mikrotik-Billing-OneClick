@@ -6,6 +6,7 @@ use App\Models\User;
 use App\Models\NetworkInventoryDevice;
 use App\Models\StockInventoryProduct;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -19,6 +20,95 @@ class OperationalModulePermissionTest extends TestCase
         $user->assignRole(Role::findByName($roleName, 'web'));
         $this->actingAs($user);
         return $user;
+    }
+
+    private function loginWithPermission(string $permission): User
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $user->givePermissionTo(Permission::findOrCreate($permission, 'web'));
+        $this->actingAs($user);
+        return $user;
+    }
+
+    public function test_mobile_banking_routes_enforce_their_matching_action_permissions(): void
+    {
+        $this->loginWithPermission('payment-setup');
+        $this->get('/mobile-banking/gateways')->assertOk();
+        $this->get('/mobile-banking/methods')->assertOk();
+        $this->get('/mobile-banking/settings')->assertForbidden();
+
+        $this->loginWithPermission('site-settings');
+        $this->get('/mobile-banking/settings')->assertOk();
+        $this->get('/mobile-banking/gateways')->assertForbidden();
+
+        $this->loginWithPermission('payment-history');
+        $this->get('/mobile-banking/logs')->assertOk();
+        $this->get('/mobile-banking')->assertForbidden();
+
+        $this->loginWithPermission('payment-collection');
+        $this->get('/mobile-banking')->assertOk();
+        $this->get('/mobile-banking/logs')->assertForbidden();
+    }
+
+    public function test_broadband_customer_data_and_package_routes_are_permission_gated(): void
+    {
+        $this->loginWithPermission('payment-collection');
+        foreach ([
+            '/broadband/customers',
+            '/broadband/customer-search',
+            '/broadband/online-customers',
+            '/broadband/due-customers',
+            '/broadband/paid-customers',
+            '/broadband/inactive-customers',
+            '/broadband/new-customers',
+            '/broadband/unverified-customers',
+            '/broadband/packages',
+            '/broadband/customer-package-import',
+        ] as $path) {
+            $this->get($path)->assertForbidden();
+        }
+
+        $this->loginWithPermission('view-customer');
+        $this->get('/broadband/customers')->assertOk();
+        $this->get('/broadband/customer-search')->assertOk();
+        $this->get('/broadband/due-customers')->assertOk();
+
+        $this->loginWithPermission('package-setup');
+        $this->get('/broadband/packages')->assertOk();
+
+        $this->loginWithPermission('create-customer');
+        $this->get('/broadband/customer-package-import')->assertOk();
+    }
+
+    public function test_network_inventory_permission_is_read_only_for_olt_and_does_not_grant_mikrotik_setup(): void
+    {
+        $this->loginWithPermission('network-inventory');
+        $olt = NetworkInventoryDevice::create([
+            'type' => 'olt',
+            'name' => 'RBAC Read Only OLT',
+            'vendor' => 'VSOL',
+            'ip_address' => '192.0.2.248',
+            'model' => 'V1600D',
+            'status' => 'unknown',
+            'health_status' => 'unknown',
+        ]);
+
+        $this->get('/network-inventory/olt/'.$olt->id.'/dashboard')->assertOk();
+        $this->get('/network-inventory/olt/'.$olt->id.'/provisioning')->assertOk();
+        $this->get('/network-inventory/mikrotik-management')->assertOk();
+
+        // A network-inventory viewer cannot trigger device polling, discovery,
+        // provisioning, ONU reboot, or open the separate MikroTik setup panel.
+        $this->post('/network-inventory/olt/'.$olt->id.'/dashboard/sync')->assertForbidden();
+        $this->post('/network-inventory/olt/'.$olt->id.'/dashboard/metrics')->assertForbidden();
+        $this->post('/network-inventory/olt/'.$olt->id.'/provisioning/discover')->assertForbidden();
+        $this->post('/network-inventory/olt/'.$olt->id.'/provisioning/execute', [
+            'profile' => 'v1600d_ep_series_v1_2',
+            'action' => 'disable_onu',
+            'pon' => '0/1',
+            'onu' => 1,
+        ])->assertForbidden();
+        $this->get('/mikrotik')->assertForbidden();
     }
 
     public function test_manager_can_view_stock_inventory_but_cannot_manage_products_or_receive_stock(): void

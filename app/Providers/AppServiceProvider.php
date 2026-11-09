@@ -2,6 +2,11 @@
 
 namespace App\Providers;
 
+use App\Models\CustomersInfo;
+use App\Models\PPPSecrets;
+use App\Observers\CustomerOnuSyncObserver;
+use App\Observers\PppSecretOnuSyncObserver;
+
 use App\Services\Olt\Adapters\VsolSnmpReadOnlyAdapter;
 use App\Services\Olt\Adapters\MultiVendorSnmpReadOnlyAdapter;
 use App\Services\Olt\OltReadOnlyAdapterManager;
@@ -48,6 +53,10 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Dispatch one coalesced read-only ONU sync when subscriber identities change.
+        CustomersInfo::observe(CustomerOnuSyncObserver::class);
+        PPPSecrets::observe(PppSecretOnuSyncObserver::class);
+
         // Keep one public domain and generate URLs using the active public port.
         $requestHost = request()->getHost();
         $requestPort = (int) request()->getPort();

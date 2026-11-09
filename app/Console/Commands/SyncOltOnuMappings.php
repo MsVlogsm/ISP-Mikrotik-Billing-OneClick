@@ -10,6 +10,7 @@ use App\Models\PPPSecrets;
 use App\Services\Olt\OltReadOnlyAdapterManager;
 use App\Services\OnuMacLedgerService;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 class SyncOltOnuMappings extends Command
@@ -18,6 +19,30 @@ class SyncOltOnuMappings extends Command
     protected $description = 'Read-only sync of ONU/customer mappings from OLT read-only adapters or configured telemetry';
 
     public function handle(OltReadOnlyAdapterManager $manager, OnuMacLedgerService $ledgerService): int
+    {
+        $lockPath = storage_path('framework/onu-mapping-sync.lock');
+        $lockHandle = @fopen($lockPath, 'c');
+
+        if ($lockHandle === false) {
+            $this->error('Cannot open the ONU sync lock file; no sync was started.');
+            return self::FAILURE;
+        }
+
+        if (! flock($lockHandle, LOCK_EX | LOCK_NB)) {
+            fclose($lockHandle);
+            $this->comment('ONU/customer sync is already running; this duplicate trigger was coalesced.');
+            return self::SUCCESS;
+        }
+
+        try {
+            return $this->runSync($manager, $ledgerService);
+        } finally {
+            flock($lockHandle, LOCK_UN);
+            fclose($lockHandle);
+        }
+    }
+
+    private function runSync(OltReadOnlyAdapterManager $manager, OnuMacLedgerService $ledgerService): int
     {
         $query = NetworkInventoryDevice::where('type', 'olt');
         if ($this->option('device')) $query->whereKey((int) $this->option('device'));
@@ -28,8 +53,30 @@ class SyncOltOnuMappings extends Command
 
             $rows = is_array($result['onus'] ?? null) ? $result['onus'] : [];
             if (!$rows) { $this->info("OLT {$olt->id}: no normalized ONU rows returned; no mapping writes performed."); continue; }
+            $meta = $result['meta'] ?? [];
+            if (($result['status'] ?? null) !== 'ok'
+                || !is_array($meta)
+                || ($meta['read_only'] ?? false) !== true
+                || !array_key_exists('writes_performed', $meta)
+                || $meta['writes_performed'] !== false) {
+                $this->warn("OLT {$olt->id}: poll is not a complete verified read-only result; no mapping writes performed.");
+                continue;
+            }
+            $identityKeys = collect($rows)->map(function (array $row): ?string {
+                $pon = trim((string) ($row['pon_port'] ?? $row['ponPort'] ?? $row['pon'] ?? ''));
+                $id = trim((string) ($row['onu_id'] ?? $row['onuId'] ?? $row['id'] ?? $row['snmp_index'] ?? ''));
+                return $pon !== '' && $id !== '' ? $pon.'|'.$id : null;
+            })->filter();
+            if ($identityKeys->count() !== $identityKeys->unique()->count()) {
+                $this->warn("OLT {$olt->id}: duplicate live PON/ONU identity detected; no mapping writes performed.");
+                continue;
+            }
+            $liveMacGroups = collect($rows)->filter(fn (array $row) => $this->normalizeMac($row['onu_mac'] ?? $row['mac'] ?? $row['onuMac'] ?? null) !== '')
+                ->groupBy(fn (array $row) => $this->normalizeMac($row['onu_mac'] ?? $row['mac'] ?? $row['onuMac'] ?? null))
+                ->filter(fn ($group) => $group->count() > 1);
+            $duplicateLiveMacs = $liveMacGroups->keys()->all();
 
-            $count = 0; $skipped = 0; $autoMapped = 0; $issues = [];
+            $count = 0; $skipped = 0; $autoMapped = 0; $sharedSubscriberLinksCreated = 0; $sharedSubscriberLinksRefreshed = 0; $issues = [];
 
             // Stable mapping identity: MAC/serial first, ONU index only as a fallback.
             // BDCOM/EPON discovery order can change between SNMP polls, so using only
@@ -40,7 +87,7 @@ class SyncOltOnuMappings extends Command
                 $ledgerService->bootstrapMissingMappings($existingMappings);
             }
             $seenMappingIds = [];
-            $byId = $existingMappings->keyBy(fn ($m) => (string) $m->onu_id);
+            $byId = $existingMappings->keyBy(fn ($m) => trim((string) $m->pon_port).'|'.trim((string) $m->onu_id));
             $byMac = $existingMappings->filter(fn ($m) => trim((string) $m->onu_mac) !== '')
                 ->groupBy(fn ($m) => $this->normalizeMac($m->onu_mac));
             $bySerial = $existingMappings->filter(fn ($m) => trim((string) $m->onu_serial) !== '')
@@ -80,6 +127,13 @@ class SyncOltOnuMappings extends Command
                 $onuId = $row['onu_id'] ?? $row['onuId'] ?? $row['id'] ?? $row['snmp_index'] ?? null;
                 if ($onuId === null || trim((string) $onuId) === '') { $skipped++; $issues[] = 'missing ONU id'; continue; }
                 $onuId = trim((string) $onuId);
+                $ponPort = trim((string) ($row['pon_port'] ?? $row['ponPort'] ?? $row['pon'] ?? ''));
+                if ($ponPort === '') {
+                    $skipped++;
+                    $issues[] = "ONU {$onuId}: missing PON port; cannot resolve a PON-scoped identity";
+                    continue;
+                }
+                $identityKey = $ponPort.'|'.$onuId;
 
                 $onuMac = $row['onu_mac'] ?? $row['mac'] ?? $row['onuMac'] ?? null;
                 $onuSerial = $row['onu_serial'] ?? $row['serial'] ?? $row['onuSerial'] ?? null;
@@ -87,12 +141,20 @@ class SyncOltOnuMappings extends Command
 
                 $macKey = $this->normalizeMac($onuMac);
                 $serialKey = strtolower(trim((string) $onuSerial));
+                if ($macKey !== '' && in_array($macKey, $duplicateLiveMacs, true)) {
+                    foreach ($byMac->get($macKey, collect()) as $ambiguousMapping) {
+                        $seenMappingIds[(string) $ambiguousMapping->id] = true;
+                    }
+                    $issues[] = "ONU {$ponPort}/{$onuId}: duplicate live MAC {$macKey}; Customer/PPPoE assignment and telemetry row left untouched pending unique identity evidence.";
+                    $count++;
+                    continue;
+                }
                 $stableMatches = $macKey !== '' ? ($byMac->get($macKey, collect())) : collect();
                 if ($stableMatches->count() === 0 && $serialKey !== '') {
                     $stableMatches = $bySerial->get($serialKey, collect());
                 }
                 $existingMapping = $stableMatches->count() === 1 ? $stableMatches->first() : null;
-                $sameIdMapping = $byId->get($onuId);
+                $sameIdMapping = $byId->get($identityKey);
                 $identityConflict = false;
 
                 // If there is no stable match, an existing ONU ID can be reused only
@@ -147,7 +209,12 @@ class SyncOltOnuMappings extends Command
                     $availableCandidates = function (array $items) use (&$usedCustomerIds, &$usedPppIds): array {
                         $items = $this->preferActiveCandidates($items);
                         return array_values(array_filter($items, static function ($customer) use (&$usedCustomerIds, &$usedPppIds): bool {
-                            return !isset($usedCustomerIds[(string) $customer->id])
+                            $customerActive = strtolower(trim((string) ($customer->status ?? ''))) === 'active';
+                            $pppActive = strtolower(trim((string) ($customer->pppUser?->status ?? ''))) === 'active';
+
+                            return $customerActive
+                                && $pppActive
+                                && !isset($usedCustomerIds[(string) $customer->id])
                                 && !isset($usedPppIds[(string) $customer->ppp_user_id]);
                         }));
                     };
@@ -245,9 +312,7 @@ class SyncOltOnuMappings extends Command
                     'ppp_user_id' => $pppId ?? $existingMapping?->ppp_user_id,
                     'onu_serial' => trim((string) $onuSerial) !== '' ? $onuSerial : $existingMapping?->onu_serial,
                     'onu_mac' => $this->normalizeMac($onuMac) !== '' ? $onuMac : $existingMapping?->onu_mac,
-                    'pon_port' => trim((string) ($row['pon_port'] ?? $row['ponPort'] ?? $row['pon'] ?? '')) !== ''
-                        ? ($row['pon_port'] ?? $row['ponPort'] ?? $row['pon'])
-                        : $existingMapping?->pon_port,
+                    'pon_port' => $ponPort !== '' ? $ponPort : $existingMapping?->pon_port,
                     'distance_m' => $row['distance'] ?? $row['distance_m'] ?? $existingMapping?->distance_m,
                     'temperature' => $row['temperature'] ?? $row['temp'] ?? $existingMapping?->temperature,
                     'supply_voltage' => $row['supply_voltage'] ?? $row['voltage'] ?? $existingMapping?->supply_voltage,
@@ -266,15 +331,18 @@ class SyncOltOnuMappings extends Command
                 if ($existingMapping) {
                     // Keep the stable mapping row. Update the index only when the
                     // current index is not already occupied by another mapping.
-                    $idConflict = (string) $existingMapping->onu_id !== $onuId
+                    $idConflict = ((string) $existingMapping->onu_id !== $onuId
+                            || trim((string) $existingMapping->pon_port) !== $ponPort)
                         && OltOnuCustomerMapping::where('olt_device_id', $olt->id)
+                            ->where('pon_port', $ponPort)
                             ->where('onu_id', $onuId)
                             ->where('id', '<>', $existingMapping->id)
                             ->exists();
                     if (! $idConflict) $existingMapping->onu_id = $onuId;
                     $existingMapping->fill($mappingData);
                     $existingMapping->save();
-                    $ledgerService->recordMapping($existingMapping);
+                    $savedMapping = $existingMapping;
+                    $ledgerService->recordMapping($savedMapping);
                 } else {
                     $savedMapping = OltOnuCustomerMapping::create($mappingData + [
                         'olt_device_id' => $olt->id,
@@ -282,6 +350,19 @@ class SyncOltOnuMappings extends Command
                     ]);
                     $ledgerService->recordMapping($savedMapping);
                 }
+
+                // An ONU is one physical optical endpoint but may carry several
+                // independent PPPoE subscriber sessions. Record every unambiguous
+                // dynamic client-MAC -> PPP last_caller_id match without replacing
+                // the legacy primary customer_id / ppp_user_id columns.
+                [$linkedNow, $refreshedNow, $subscriberIssues] = $this->syncSharedPppSubscribers(
+                    $savedMapping,
+                    $row,
+                    $byCallerMac,
+                );
+                $sharedSubscriberLinksCreated += $linkedNow;
+                $sharedSubscriberLinksRefreshed += $refreshedNow;
+                foreach ($subscriberIssues as $subscriberIssue) $issues[] = $subscriberIssue;
                 $count++;
             }
             // Only make absence claims after a complete, healthy, explicitly read-only
@@ -297,20 +378,41 @@ class SyncOltOnuMappings extends Command
             // Keep OLT-level live counters in sync only after a complete, verified,
             // read-only poll. Capacity remains a separate PON-port property.
             if ($completeReadOnlyPoll && ! $this->option('dry-run')) {
-                $liveOnuIds = collect($rows)
-                    ->map(fn (array $row) => trim((string) ($row['onu_id'] ?? $row['onuId'] ?? $row['id'] ?? $row['snmp_index'] ?? '')))
-                    ->filter(fn (string $id) => $id !== '')
+                $liveOnuKeys = collect($rows)
+                    ->map(function (array $row): ?string {
+                        $pon = trim((string) ($row['pon_port'] ?? $row['ponPort'] ?? $row['pon'] ?? ''));
+                        $id = trim((string) ($row['onu_id'] ?? $row['onuId'] ?? $row['id'] ?? $row['snmp_index'] ?? ''));
+                        return $pon !== '' && $id !== '' ? $pon.'|'.$id : null;
+                    })
+                    ->filter()
                     ->unique()
                     ->values();
-                $liveTotal = $liveOnuIds->count();
+                $liveTotal = count($rows);
                 $liveOnline = collect($rows)
                     ->filter(fn (array $row) => $this->normalizeStatus($row) === 'online')
                     ->count();
                 $liveMappings = OltOnuCustomerMapping::where('olt_device_id', $olt->id)
-                    ->whereIn('onu_id', $liveOnuIds->all())
-                    ->get(['id', 'customer_id']);
-                $mappedOnuCount = $liveMappings->whereNotNull('customer_id')->count();
-                $mappedCustomerCount = $liveMappings->whereNotNull('customer_id')->pluck('customer_id')->unique()->count();
+                    ->get(['id', 'pon_port', 'onu_id', 'customer_id'])
+                    ->filter(fn ($mapping) => $liveOnuKeys->contains(
+                        trim((string) $mapping->pon_port).'|'.trim((string) $mapping->onu_id)
+                    ));
+                $legacyMappedCustomerIds = $liveMappings->whereNotNull('customer_id')->pluck('customer_id');
+                $liveMappingIds = $liveMappings->pluck('id')->all();
+                $subscriberLinks = $liveMappingIds
+                    ? DB::table('olt_onu_customer_ppp_links')
+                        ->whereIn('olt_onu_customer_mapping_id', $liveMappingIds)
+                        ->where('status', 'active')
+                        ->get(['olt_onu_customer_mapping_id', 'customer_id'])
+                    : collect();
+                $mappedCustomerIds = $legacyMappedCustomerIds
+                    ->merge($subscriberLinks->pluck('customer_id'))
+                    ->unique()
+                    ->values();
+                $mappedOnuIds = $liveMappings->whereNotNull('customer_id')->pluck('id')
+                    ->merge($subscriberLinks->pluck('olt_onu_customer_mapping_id'))
+                    ->unique();
+                $mappedOnuCount = $mappedOnuIds->count();
+                $mappedCustomerCount = $mappedCustomerIds->count();
 
                 $onlineCount = collect($rows)->filter(fn (array $row) => $this->normalizeStatus($row) === 'online')->count();
                 $offlineCount = collect($rows)->filter(fn (array $row) => $this->normalizeStatus($row) === 'offline')->count();
@@ -364,7 +466,7 @@ class SyncOltOnuMappings extends Command
                     'avg_latency_ms' => is_numeric($olt->last_latency_ms) ? (int) $olt->last_latency_ms : null,
                 ])->save();
 
-                $this->line("OLT {$olt->id}: live counters reconciled — {$onlineCount}/{$liveTotal} online; {$mappedCustomerCount} mapped customers; RX samples {$rxReadings->count()}.");
+                $this->line("OLT {$olt->id}: live counters reconciled — {$onlineCount}/{$liveTotal} online; {$mappedCustomerCount} linked PPP customers across {$mappedOnuCount} mapped ONUs; RX samples {$rxReadings->count()}.");
             }
 
             $staleCandidates = $existingMappings->filter(
@@ -381,7 +483,7 @@ class SyncOltOnuMappings extends Command
                 $issues[] = 'Some stored online ONU rows were absent, but no absence warning was trusted because the poll was partial, invalid, or not explicitly verified as read-only.';
             }
 
-            $this->info("OLT {$olt->id}: normalized {$count} ONU rows synced; auto-mapped {$autoMapped} unambiguous customer matches; stale online rows not observed: ".($completeReadOnlyPoll ? $staleCandidates->count() : 'not assessed')."; skipped {$skipped} invalid rows.");
+            $this->info("OLT {$olt->id}: normalized {$count} ONU rows synced; auto-mapped {$autoMapped} primary customer matches; shared-ONU PPP links added {$sharedSubscriberLinksCreated}, refreshed {$sharedSubscriberLinksRefreshed}; stale online rows not observed: ".($completeReadOnlyPoll ? $staleCandidates->count() : 'not assessed')."; skipped {$skipped} invalid rows.");
             foreach (array_slice($issues, 0, 10) as $issue) $this->warn($issue);
 
             if (!empty($result['meta']['model_profile_mismatch'])) {
@@ -392,6 +494,11 @@ class SyncOltOnuMappings extends Command
             if (($result['meta']['opm_status'] ?? null) === 'not_ready') {
                 $this->warn("OLT {$olt->id}: optical TX/RX readings are unavailable in this poll; historical OPM values and timestamps were preserved.");
             }
+            if (($result['meta']['ssh_opm_status'] ?? null) === 'credentials_required') {
+                $this->warn("OLT {$olt->id}: SSH OPM fallback was not run because the separate CLI enable password is not configured in OLT Admin settings.");
+            } elseif (!empty($result['meta']['ssh_opm_message'])) {
+                $this->line("OLT {$olt->id}: ".$result['meta']['ssh_opm_message']);
+            }
             if (count($issues) > 10) $this->warn('Additional mapping validation issues: '.(count($issues)-10));
         }
 
@@ -401,13 +508,179 @@ class SyncOltOnuMappings extends Command
         return self::SUCCESS;
     }
 
+    /**
+     * Link each uniquely identified, active PPP subscriber behind the current ONU.
+     * The physical mapping keeps its original primary customer while this table
+     * stores additional subscribers. Ambiguous MACs and cross-ONU conflicts are skipped.
+     *
+     * @return array{0:int,1:int,2:array<int,string>}
+     */
+    private function syncSharedPppSubscribers(OltOnuCustomerMapping $mapping, array $row, array $byCallerMac): array
+    {
+        if (strtolower(trim((string) ($row['status'] ?? ''))) !== 'online') {
+            return [0, 0, []];
+        }
+
+        $clientMacs = collect((array) ($row['client_macs'] ?? []))
+            ->map(fn ($mac) => $this->normalizeMac($mac))
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($clientMacs->isEmpty()) {
+            return [0, 0, []];
+        }
+
+        $created = 0;
+        $refreshed = 0;
+        $issues = [];
+
+        foreach ($clientMacs as $clientMac) {
+            $matches = collect($byCallerMac[$clientMac] ?? [])
+                ->unique(fn ($customer) => (string) $customer->id)
+                ->filter(function ($customer): bool {
+                    $ppp = $customer->pppUser;
+
+                    return $ppp
+                        && (int) $customer->ppp_user_id === (int) $ppp->id
+                        && strtolower(trim((string) $customer->status)) === 'active'
+                        && strtolower(trim((string) $ppp->status)) === 'active';
+                })
+                ->values();
+
+            if ($matches->count() !== 1) {
+                if ($matches->count() > 1) {
+                    $issues[] = "ONU {$mapping->pon_port}/{$mapping->onu_id}: PPP caller MAC {$clientMac} belongs to multiple active customers; no shared link was created.";
+                }
+                continue;
+            }
+
+            $customer = $matches->first();
+            $ppp = $customer->pppUser;
+            if (! $ppp || ! $customer->id || ! $ppp->id) {
+                continue;
+            }
+
+            // A customer or PPP account already linked to a different ONU is a
+            // physical move/conflict, not a second subscriber on this ONU.
+            $otherPrimary = OltOnuCustomerMapping::query()
+                ->where('id', '<>', $mapping->id)
+                ->where(function ($query) use ($customer, $ppp): void {
+                    $query->where('customer_id', $customer->id)
+                        ->orWhere('ppp_user_id', $ppp->id);
+                })
+                ->exists();
+
+            $otherSharedLink = DB::table('olt_onu_customer_ppp_links')
+                ->where('ppp_user_id', $ppp->id)
+                ->where('status', 'active')
+                ->where('olt_onu_customer_mapping_id', '<>', $mapping->id)
+                ->exists();
+
+            $otherCustomerLink = DB::table('olt_onu_customer_ppp_links')
+                ->where('customer_id', $customer->id)
+                ->where('status', 'active')
+                ->where('olt_onu_customer_mapping_id', '<>', $mapping->id)
+                ->exists();
+
+            if ($otherPrimary || $otherSharedLink || $otherCustomerLink) {
+                $issues[] = "ONU {$mapping->pon_port}/{$mapping->onu_id}: customer {$customer->customer_unique_id} / PPP {$ppp->username} is already assigned to another ONU; shared link was not duplicated.";
+                continue;
+            }
+
+            $result = DB::transaction(function () use ($mapping, $customer, $ppp, $clientMac): string {
+                $existing = DB::table('olt_onu_customer_ppp_links')
+                    ->where('olt_onu_customer_mapping_id', $mapping->id)
+                    ->where('ppp_user_id', $ppp->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                $now = now();
+                $values = [
+                    'customer_id' => $customer->id,
+                    'client_mac' => implode(':', str_split($clientMac, 2)),
+                    'source' => 'olt_dynamic_mac+ppp_last_caller_id',
+                    'status' => 'active',
+                    'last_seen_at' => $now,
+                    'updated_at' => $now,
+                ];
+
+                if ($existing) {
+                    DB::table('olt_onu_customer_ppp_links')
+                        ->where('id', $existing->id)
+                        ->update($values);
+
+                    return 'refreshed';
+                }
+
+                DB::table('olt_onu_customer_ppp_links')->insert($values + [
+                    'olt_onu_customer_mapping_id' => $mapping->id,
+                    'ppp_user_id' => $ppp->id,
+                    'first_seen_at' => $now,
+                    'created_at' => $now,
+                ]);
+
+                return 'created';
+            }, 3);
+
+            if ($result === 'created') $created++;
+            else $refreshed++;
+        }
+
+        return [$created, $refreshed, $issues];
+    }
+
     private function readSource(NetworkInventoryDevice $olt, OltReadOnlyAdapterManager $manager): array
     {
         try {
-            return $manager->read($olt);
+            $result = $manager->read($olt);
         } catch (\Throwable) {
             return $this->readLegacyTelemetry($olt);
         }
+
+        if (strcasecmp((string) $olt->vendor, 'VSOL') !== 0 || empty($result['ok'])) {
+            return $result;
+        }
+
+        $rows = array_values(array_filter((array) ($result['onus'] ?? []), 'is_array'));
+        $missingOpm = count(array_filter($rows, static fn ($row) =>
+            !is_numeric($row['rx_power'] ?? null) || !is_numeric($row['tx_power'] ?? null)
+        ));
+        if ($missingOpm === 0) return $result;
+
+        if (!filled($olt->getRawOriginal('enable_password'))) {
+            $result['meta']['ssh_opm_status'] = 'credentials_required';
+            $result['meta']['ssh_opm_message'] = 'SNMP OPM is partial. SSH CLI OPM fallback is ready but requires a separate CLI enable password in OLT Admin settings.';
+            return $result;
+        }
+
+        $sshOpm = app(\App\Services\Olt\VsolSshOpmCollector::class)->collect($olt, $rows, null, null, false);
+        if (!empty($sshOpm['ok'])
+            && is_array($sshOpm['meta'] ?? null)
+            && ($sshOpm['meta']['read_only'] ?? false) === true
+            && ($sshOpm['meta']['writes_performed'] ?? true) === false) {
+            $result['onus'] = $sshOpm['onus'];
+            $result['meta']['ssh_opm_status'] = 'ok';
+            $result['meta']['ssh_opm_message'] = $sshOpm['message'] ?? 'VSOL SSH OPM fallback completed.';
+            $result['meta']['ssh_opm'] = $sshOpm['meta'];
+            $onuCount = count($result['onus']);
+            $rxCount = count(array_filter($result['onus'], static fn ($row) => is_numeric($row['rx_power'] ?? null)));
+            $txCount = count(array_filter($result['onus'], static fn ($row) => is_numeric($row['tx_power'] ?? null)));
+            $result['meta']['opm_rx_count'] = $rxCount;
+            $result['meta']['opm_tx_count'] = $txCount;
+            $result['meta']['opm_rx_coverage'] = $onuCount > 0 ? round(($rxCount / $onuCount) * 100, 1) : 0;
+            $result['meta']['opm_tx_coverage'] = $onuCount > 0 ? round(($txCount / $onuCount) * 100, 1) : 0;
+            // Keep the original inventory status separate from OPM coverage.
+            // A partial optical table does not invalidate a complete, read-only ONU inventory;
+            // valid per-ONU RX/TX rows must still refresh while missing rows remain untouched.
+            $result['meta']['opm_status'] = ($rxCount === $onuCount && $txCount === $onuCount)
+                ? 'ok' : (($rxCount + $txCount) > 0 ? 'partial' : 'not_ready');
+        } else {
+            $result['meta']['ssh_opm_status'] = $sshOpm['status'] ?? 'failed';
+            $result['meta']['ssh_opm_message'] = $sshOpm['message'] ?? 'VSOL SSH OPM fallback did not return verified rows.';
+        }
+
+        return $result;
     }
 
     private function readLegacyTelemetry(NetworkInventoryDevice $olt): array

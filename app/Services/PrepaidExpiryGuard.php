@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\BillingInfo;
 use App\Models\CollectionSummary;
+use App\Models\CustomerAdvanceTransaction;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -30,6 +31,32 @@ class PrepaidExpiryGuard
 
         self::$paidRenewalDepth++;
 
+        try {
+            return $billing->save();
+        } finally {
+            self::$paidRenewalDepth = max(0, self::$paidRenewalDepth - 1);
+        }
+    }
+
+    /** Permit prepaid expiry only when a real wallet allocation was posted in this transaction. */
+    public function saveAfterAdvanceWalletAllocation(BillingInfo $billing, CustomerAdvanceTransaction $allocation): bool
+    {
+        if (! $this->isPrepaid($billing) || ! $this->isExpiryExtension($billing)) {
+            return $billing->save();
+        }
+
+        $validAllocation = DB::transactionLevel() > 0
+            && $allocation->exists
+            && $allocation->entry_type === 'allocation'
+            && $allocation->direction === 'debit'
+            && (float) $allocation->amount > 0
+            && (string) $allocation->customer_unique_id === (string) $billing->customer_bill_unique_id;
+
+        if (! $validAllocation) {
+            $this->reject($billing, 'A prepaid expiry can only be extended against a recorded customer advance wallet allocation.');
+        }
+
+        self::$paidRenewalDepth++;
         try {
             return $billing->save();
         } finally {

@@ -2,8 +2,8 @@
 
 <div align="center">
 
-![Laravel](https://img.shields.io/badge/Laravel-12.x-FF2D20?style=for-the-badge&logo=laravel&logoColor=white)
-![PHP](https://img.shields.io/badge/PHP-8.3%2B-777BB4?style=for-the-badge&logo=laravel&logoColor=white)
+![Laravel](https://img.shields.io/badge/Laravel-13.x-FF2D20?style=for-the-badge&logo=laravel&logoColor=white)
+![PHP](https://img.shields.io/badge/PHP-8.5%2B-777BB4?style=for-the-badge&logo=laravel&logoColor=white)
 ![Filament](https://img.shields.io/badge/Filament-5.x-F59E0B?style=for-the-badge&logo=laravel&logoColor=white)
 ![MikroTik API](https://img.shields.io/badge/MikroTik-RouterOS%20API-000000?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-AGPL--3.0-blue?style=for-the-badge)
@@ -191,7 +191,7 @@ To prevent leakage of private OTPs or unauthorized code executions:
 The core libraries and packages keeping the platform running smoothly:
 
 ### Backend Architecture
-- **Framework:** Laravel 12.x
+- **Framework:** Laravel 13.x
 - **Admin Panel:** Filament PHP v5
 - **Dynamic Frontend:** Livewire v4
 - **Router Connection:** [Evilfreelancer RouterOS API PHP Wrapper](https://github.com/evilfreelancer/routeros-api-php)

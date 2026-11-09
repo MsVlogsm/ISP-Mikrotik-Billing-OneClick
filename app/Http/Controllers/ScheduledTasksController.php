@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\BillingInfo;
 use App\Models\CollectionSummary;
+use App\Models\CustomerAdvanceTransaction;
 use App\Models\CustomersInfo;
 use App\Models\NotificationLogs;
 use App\Models\PaymentSummary;
@@ -12,6 +13,7 @@ use App\Models\RouterList;
 use App\Models\SmsTemplate;
 use App\Services\MikrotikSSHService;
 use App\Services\PrepaidBillingCycle;
+use App\Services\CustomerAdvanceService;
 use Carbon\Carbon;
 use XLink\SmsBridge\Facades\SmsBridge;
 
@@ -94,15 +96,27 @@ class ScheduledTasksController extends Controller
                 ->where('summary_date', $nextMonthStart)
                 ->exists();
 
+            // Advance deposits are cash receipts but are not current-month bill payments.
+            // Only normal collections plus wallet allocations reduce this billing cycle.
             $totalCollectionAmount = CollectionSummary::where('customer_collection_unique_id', $billing->customer_bill_unique_id)
                 ->whereBetween('collection_date', [Carbon::now()->startOfMonth(), Carbon::now()->endOfMonth()])
+                ->where(function ($query) { $query->whereNull('payment_type')->orWhere('payment_type', '<>', 'advance'); })
                 ->sum('collection_amount');
+            $walletAllocationsThisMonth = CustomerAdvanceTransaction::query()
+                ->where('customer_id', $customer->id)
+                ->where('entry_type', 'allocation')
+                ->where('bill_month', Carbon::now()->format('Y-m'))
+                ->sum('amount');
             // if ($totalCollectionAmount == $billing->paid_amount) {
             $subtotal = $billing->monthly_rent + $billing->additional_charge + $billing->vat + $billing->previous_due;
             $discountTotal = $subtotal - $billing->discount;
             $grandTotal = $discountTotal - $billing->advance;
-            $calculateAmount = $grandTotal - $totalCollectionAmount;
-            $nextMonthBill = $calculateAmount + ($billing->monthly_rent + $billing->additional_charge + $billing->vat);
+            $calculateAmount = $grandTotal - $totalCollectionAmount - (float) $walletAllocationsThisMonth;
+            $nextMonthBillBeforeWallet = max(0, $calculateAmount + ($billing->monthly_rent + $billing->additional_charge + $billing->vat));
+            // Do not reserve wallet credit until we know this next-month summary is new.
+            // Existing summaries mean the bill was already generated and must not be charged twice.
+            $walletAllocated = 0.0;
+            $nextMonthBill = round($nextMonthBillBeforeWallet, 2);
 
             if ($calculateAmount > 0) {
                 $due_amount = $calculateAmount;
@@ -118,6 +132,14 @@ class ScheduledTasksController extends Controller
                 'disable_count' => 0,
             ]);
             if (! $existingPayment) {
+                if ($customer->status !== 'free') {
+                    $walletAllocated = app(CustomerAdvanceService::class)->allocateForBill(
+                        $customer,
+                        (float) $nextMonthBillBeforeWallet,
+                        $nextMonthStart->format('Y-m')
+                    );
+                    $nextMonthBill = max(0, round($nextMonthBillBeforeWallet - $walletAllocated, 2));
+                }
                 if ($customer->status == 'free') {
                     PaymentSummary::create([
                         'customer_payment_unique_id' => $billing->customer_bill_unique_id,
@@ -144,7 +166,7 @@ class ScheduledTasksController extends Controller
                         'vat' => $billing->vat,
                         'discount' => $billing->discount,
                         'previous_due' => $due_amount,
-                        'advance' => $advance,
+                        'advance' => $advance + $walletAllocated,
                     ]);
                     // Update BillingInfo with new values
                     BillingInfo::where('customer_bill_unique_id', $billing->customer_bill_unique_id)
@@ -451,6 +473,37 @@ class ScheduledTasksController extends Controller
                 }
 
                 if ($shouldDisable && $pppUser && $pppUser->username) {
+                    // Payment/Enable may have completed while this scheduled scan was
+                    // evaluating an older snapshot. Re-read immediately before disabling.
+                    $latestCustomer = CustomersInfo::with(['billing', 'pppUser'])
+                        ->whereKey($customer->getKey())
+                        ->first();
+                    if (! $latestCustomer || $latestCustomer->status !== 'active' || ! $latestCustomer->billing) {
+                        return;
+                    }
+
+                    if ($latestCustomer->billing->billing_type === 'prepaid') {
+                        $latestExpiry = $latestCustomer->billing->auto_disable_date;
+                        if (! $latestExpiry && $latestCustomer->connection_date) {
+                            $latestExpiry = PrepaidBillingCycle::nextExpiryDate(
+                                $latestCustomer->connection_date,
+                                $latestCustomer->connection_date
+                            )->toDateString();
+                        }
+
+                        if (! $latestExpiry || Carbon::parse($latestExpiry, $tz)->startOfDay()->gt($today)) {
+                            return;
+                        }
+                    }
+
+                    $customer = $latestCustomer;
+                    $billing = $latestCustomer->billing;
+                    $pppUser = $latestCustomer->pppUser;
+
+                    if (! $pppUser || ! $pppUser->username) {
+                        return;
+                    }
+
                     if (filled($pppUser->router_name) && \DB::table('mikrotik_pending_actions')
                         ->where('customer_unique_id', $customer->customer_unique_id)
                         ->where('router_name', $pppUser->router_name)
@@ -472,6 +525,46 @@ class ScheduledTasksController extends Controller
                                 false,
                                 true
                             );
+
+                            // A prepaid renewal may complete during the router call.
+                            // Restore Enable instead of committing a stale Disable locally.
+                            $latestAfterRouterWrite = CustomersInfo::with('billing')
+                                ->whereKey($customer->getKey())
+                                ->first();
+                            if ($latestAfterRouterWrite
+                                && $latestAfterRouterWrite->status === 'active'
+                                && $latestAfterRouterWrite->billing?->billing_type === 'prepaid'
+                                && $latestAfterRouterWrite->billing->auto_disable_date
+                                && Carbon::parse($latestAfterRouterWrite->billing->auto_disable_date, $tz)->startOfDay()->gt($today)) {
+                                try {
+                                    app(MikrotikController::class)->enablePPPSecret(
+                                        $customer->customer_unique_id,
+                                        $router->router_name,
+                                        $pppUser->username
+                                    );
+                                    if (filled($pppUser->profile)) {
+                                        app(MikrotikController::class)->updatePPPSecret(
+                                            $router->router_name,
+                                            $pppUser->username,
+                                            'profile',
+                                            $pppUser->profile
+                                        );
+                                    }
+                                    PPPSecrets::where('id', $customer->ppp_user_id)->update(['status' => 'active']);
+                                } catch (\Throwable $restoreError) {
+                                    app(\App\Services\MikrotikPendingActionQueue::class)->queue(
+                                        $customer->customer_unique_id,
+                                        $router->router_name,
+                                        $pppUser->username,
+                                        'enable'
+                                    );
+                                    \Log::warning('Renewed prepaid customer was re-enabled after a concurrent auto-disable.', [
+                                        'customer_unique_id' => $customer->customer_unique_id,
+                                        'error' => $restoreError->getMessage(),
+                                    ]);
+                                }
+                                return;
+                            }
 
                             if ($disableStatus === 'fallback') {
                                 $fallbackIDs[] = $customer->customer_unique_id.' ('.$pppUser->username.')';

@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Http\Middleware\RestrictToProfileIfNoPermissions;
 use App\Services\AiEngineerDiagnosticService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Spatie\Permission\Models\Permission;
 use Mockery;
 use Tests\TestCase;
 
@@ -18,7 +19,25 @@ class AiEngineerControllerTest extends TestCase
     {
         parent::setUp();
         $this->withoutMiddleware(RestrictToProfileIfNoPermissions::class);
+        $user = User::factory()->create();
+        $user->givePermissionTo(Permission::findOrCreate('network-inventory', 'web'));
+        $this->actingAs($user);
+    }
+
+
+    public function test_ai_engineer_routes_reject_users_without_network_permissions(): void
+    {
         $this->actingAs(User::factory()->create());
+
+        $this->get('/ai-engineer')->assertForbidden();
+        $this->get('/ai-engineer/search?q=BT0001')->assertForbidden();
+        $this->post('/ai-engineer/diagnose', [])->assertForbidden();
+        $this->post('/ai-engineer/chat', [])->assertForbidden();
+        $this->post('/ai-engineer/map-onu', [
+            'mapping_id' => 77,
+            'customer_id' => 1,
+        ])->assertForbidden();
+        $this->post('/ai-engineer/feedback', [])->assertForbidden();
     }
 
     public function test_ai_engineer_map_onu_endpoint_calls_the_guarded_mapping_service(): void

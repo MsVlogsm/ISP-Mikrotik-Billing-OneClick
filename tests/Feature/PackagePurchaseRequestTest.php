@@ -6,6 +6,7 @@ use App\Models\PackagePurchaseRequest;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
+use PHPUnit\Framework\Attributes\Test;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -13,7 +14,7 @@ class PackagePurchaseRequestTest extends TestCase
 {
     use RefreshDatabase;
 
-    /** @test */
+    #[Test]
     public function customers_can_submit_purchase_request_via_livewire_form()
     {
         Livewire::test('⚡package-purchase-form')
@@ -41,7 +42,7 @@ class PackagePurchaseRequestTest extends TestCase
         ]);
     }
 
-    /** @test */
+    #[Test]
     public function purchase_request_form_validates_required_fields()
     {
         Livewire::test('⚡package-purchase-form')
@@ -55,7 +56,7 @@ class PackagePurchaseRequestTest extends TestCase
         $this->assertDatabaseEmpty('package_purchase_requests');
     }
 
-    /** @test */
+    #[Test]
     public function admin_can_manage_purchase_requests()
     {
         $role = Role::firstOrCreate(['name' => 'Super Admin']);

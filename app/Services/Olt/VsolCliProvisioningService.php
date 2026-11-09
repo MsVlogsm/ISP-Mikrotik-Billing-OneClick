@@ -32,6 +32,7 @@ class VsolCliProvisioningService
         if ($username === '' || $password === '') throw new RuntimeException('OLT SSH credentials are not configured.');
         $port = (int)($device->ssh_port ?: 22);
         $this->ssh = new SSH2($host, $port, max(3, (int)($device->cli_timeout ?: 10)));
+        $this->ssh->setTimeout(max(5, (int) ($device->cli_timeout ?: 12)));
         if (!$this->ssh->login($username, $password)) throw new RuntimeException('VSOL SSH login failed.');
     }
 
@@ -40,13 +41,174 @@ class VsolCliProvisioningService
         return $this->runReadOnly('show version');
     }
 
+    /** Enter privileged EXEC only; never enters configuration mode or writes device configuration. */
+    public function enterPrivilegedReadOnly(NetworkInventoryDevice $device): void
+    {
+        $promptName = trim((string) $device->name) ?: 'BT-EPON-OLT';
+        $privilegedPrompt = '/'.preg_quote($promptName, '/').'#[[:space:]]*$/D';
+        $passwordOrPrivilegedPrompt = '/(?:Password:[[:space:]]*|'.preg_quote($promptName, '/').'#[[:space:]]*)$/D';
+
+        $this->ssh->write("enable\n");
+        $response = trim((string) $this->ssh->read($passwordOrPrivilegedPrompt));
+
+        if (preg_match('/Password:[[:space:]]*$/iD', $response)) {
+            $enablePassword = $this->secret($device, 'enable_password');
+            if ($enablePassword === '') {
+                throw new RuntimeException('OLT CLI requires a separate enable password. Save it under Admin Panel → OLT Management → Edit OLT → CLI Enable Password.');
+            }
+
+            $this->ssh->write($enablePassword."\n");
+            $response = trim((string) $this->ssh->read($passwordOrPrivilegedPrompt));
+            if (preg_match('/Password:[[:space:]]*$/iD', $response)) {
+                throw new RuntimeException('OLT rejected the CLI enable password. No configuration command was sent.');
+            }
+        }
+
+        if (!preg_match($privilegedPrompt, $response)) {
+            throw new RuntimeException('OLT did not confirm the privileged CLI prompt. No configuration command was sent.');
+        }
+    }
+
+    /** This command is available in the live-verified user and privileged EXEC modes. */
+    public function discoverReadOnlyCommands(): string
+    {
+        return $this->runReadOnly('list');
+    }
+
+    /** Execute the vendor-documented read-only ONU OPM show command in config CLI context. */
+    public function readOnlyOpmDiagnostics(NetworkInventoryDevice $device): array
+    {
+        $this->connectReadOnly($device);
+        $this->enterPrivilegedReadOnly($device);
+
+        // Only changes this SSH session's terminal pagination preference.
+        $this->ssh->write("terminal length 0\n");
+        $this->ssh->read('/(?:#|>)\s*$/D');
+
+        // VSOL's CLI manual places this show-only OPM command under config CLI context.
+        // Entering the context does not alter an OLT configuration value.
+        $context = $this->runReadOnly('configure terminal');
+        if (preg_match('/(?:Unknown command|Command incomplete|There is no matched command)/i', $context)) {
+            throw new RuntimeException('OLT did not accept the CLI context needed for the documented read-only OPM show command.');
+        }
+
+        $output = $this->runReadOnly('show onu opm-diag all');
+        if (preg_match('/(?:Unknown command|Command incomplete|There is no matched command)/i', $output)) {
+            throw new RuntimeException('OLT rejected show onu opm-diag all in config CLI context.');
+        }
+        $lines = array_values(array_filter(preg_split('/\\R/', $output) ?: [], fn ($line) => trim($line) !== ''));
+        $onuRows = array_values(array_filter($lines, static fn ($line) => preg_match('/EPON0\/\d+:\d+/', $line)));
+
+        return [
+            'accepted' => true,
+            'line_count' => count($lines),
+            'onu_row_count' => count($onuRows),
+            'sample' => array_slice($onuRows, 0, 15),
+            'truncated' => count($onuRows) > 15 || str_contains($output, '--More--'),
+        ];
+    }
+
+    /** Test VSOL's PON-scoped and single-ONU optical show commands without changing device configuration. */
+    public function readOnlyPonOpmDiagnostics(NetworkInventoryDevice $device, int $pon, int $onuId): array
+    {
+        if ($pon < 1 || $pon > 4 || $onuId < 1 || $onuId > 256) {
+            throw new RuntimeException('PON/ONU diagnostic identity is outside the supported range.');
+        }
+
+        $this->connectReadOnly($device);
+        $this->enterPrivilegedReadOnly($device);
+        $this->ssh->write("terminal length 0\n");
+        $this->ssh->read('/(?:#|>)\s*$/D');
+        $this->ssh->write("configure terminal\n");
+        $context = trim((string) $this->ssh->read('/BT-EPON-OLT\(config\)#\s*$/D'));
+        if (!str_ends_with($context, '(config)#')) {
+            throw new RuntimeException('OLT did not enter config CLI context.');
+        }
+        $this->ssh->write("interface epon 0/{$pon}\n");
+        $interfacePrompt = trim((string) $this->ssh->read('/(?:[A-Za-z0-9_.()\/-]+[>#]\s*)$/D'));
+        if (!str_contains($interfacePrompt, "epon 0/{$pon}")) {
+            throw new RuntimeException('OLT did not confirm the requested EPON interface context.');
+        }
+
+        $results = [];
+        foreach (['show onu opm-diag', "show onu {$onuId} ctc opm_diag"] as $command) {
+            $this->ssh->write($command."\n");
+            $output = trim((string) $this->ssh->read('/(?:[A-Za-z0-9_.()\/-]+[>#]\s*)$/D'));
+            $lines = array_values(array_filter(preg_split('/\\R/', $output) ?: [], fn ($line) => trim($line) !== ''));
+            $onuRows = array_values(array_filter($lines, static fn ($line) => preg_match('/EPON0\/\d+:\d+/', $line)));
+            $results[$command] = [
+                'accepted' => !preg_match('/(?:Unknown command|Command incomplete|There is no matched command|Invalid input)/i', $output),
+                'line_count' => count($lines),
+                'onu_row_count' => count($onuRows),
+                'sample' => array_slice($onuRows ?: $lines, 0, 20),
+            ];
+        }
+
+        return $results;
+    }
+
+    /** Fetch the live MAC address table in privileged EXEC only; no configuration mode. */
+    public function readOnlyMacTable(NetworkInventoryDevice $device): array
+    {
+        $this->connectReadOnly($device);
+        $this->enterPrivilegedReadOnly($device);
+
+        // This is a VTY terminal display preference, not a persistent OLT config change.
+        $this->ssh->write("terminal length 0\n");
+        $paging = trim((string) $this->ssh->read('/(?:#|>)\s*$/D'));
+        if (preg_match('/(?:Unknown command|Command incomplete|There is no matched command)/i', $paging)) {
+            throw new RuntimeException('OLT did not accept the terminal paging command; MAC table read was not attempted.');
+        }
+
+        $this->ssh->write("show mac address-table\n");
+        $output = trim((string) $this->ssh->read('/(?:#|>)\s*$/D'));
+        if ($output === '' || preg_match('/(?:Unknown command|Command incomplete|There is no matched command)/i', $output)) {
+            throw new RuntimeException('OLT rejected the advertised read-only MAC address-table command.');
+        }
+
+        $lines = array_values(array_filter(preg_split('/\\R/', $output) ?: [], fn ($line) => trim($line) !== ''));
+        $macRows = [];
+        foreach ($lines as $line) {
+            if (!preg_match('/^\s*(\d+)\s+((?:[0-9a-f]{4}:){2}[0-9a-f]{4}|(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2})\s+(Dynamic|Static)\s+(EPON0\/(\d+):(\d+)|\S+)/i', $line, $m)) continue;
+            $hex = preg_replace('/[^0-9a-f]/i', '', $m[2]) ?: '';
+            if (strlen($hex) !== 12) continue;
+            $mac = implode(':', str_split(strtolower($hex), 2));
+            $pon = isset($m[4]) && preg_match('/^EPON0\/(\d+):(\d+)$/i', $m[4], $portMatch) ? $portMatch[1] : null;
+            $onu = isset($portMatch[2]) ? $portMatch[2] : null;
+            $macRows[] = [
+                'vlan' => (int) $m[1],
+                'mac' => $mac,
+                'type' => strtolower($m[3]),
+                'port' => $m[4],
+                'pon_port' => $pon,
+                'onu_id' => $onu,
+                'dynamic_onu_client' => strtolower($m[3]) === 'dynamic' && $pon !== null && $onu !== null,
+            ];
+        }
+        $onuMacRows = array_values(array_filter($macRows, static fn ($row) => $row['dynamic_onu_client']));
+
+        return [
+            'accepted' => true,
+            'line_count' => count($lines),
+            'mac_row_count' => count($macRows),
+            'dynamic_onu_client_count' => count($onuMacRows),
+            'dynamic_onu_client_macs' => $onuMacRows,
+            'sample' => array_slice($lines, 0, 30),
+            'truncated' => count($lines) > 30 || str_contains($output, '--More--'),
+        ];
+    }
+
     private function runReadOnly(string $command): string
     {
-        if (preg_match('/[\r\n;$]/', $command) || !in_array($command, ['show version', 'show system'], true)) {
+        $allowed = [
+            'show version', 'show system', 'list', 'show memory', 'show ip rip', 'show ip rip status',
+            'terminal length 0', 'show mac address-table', 'show onu ?', 'show onu opm-diag ?', 'show onu opm-diag all', 'configure terminal',
+        ];
+        if (preg_match('/[\r\n;$]/', $command) || !in_array($command, $allowed, true)) {
             throw new RuntimeException('Unsafe read-only discovery command rejected.');
         }
         $this->ssh->write($command."\n");
-        return trim((string)$this->ssh->read('/(?:#|>)\s*$/m'));
+        return trim((string)$this->ssh->read('/(?:#|>)\s*$/D'));
     }
 
     public function authorizeByMac(string $pon, string $mac): string
@@ -76,6 +238,27 @@ class VsolCliProvisioningService
         if (!filter_var($netmask, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) throw new RuntimeException('Invalid IPv4 netmask.');
         foreach ([$dns1, $dns2] as $dns) if ($dns !== '' && !filter_var($dns, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) throw new RuntimeException('Invalid DNS IPv4 address.');
         return $this->runMany($this->commands('static_ip', compact('pon','onu','ip','netmask','gateway','dns1','dns2')));
+    }
+
+    /** Restart exactly one already-registered ONU using the selected model profile. */
+    public function rebootOnu(string $pon, string $onu): string
+    {
+        $this->validatePon($pon);
+        $this->validateOnu($onu);
+        $profileKey = (string) ($this->config['vsol_model_profile'] ?? '');
+        $profile = config('olt_vsol.profiles.'.$profileKey, []);
+        $allowedFirmware = (array) ($profile['firmware'] ?? []);
+        if ($profileKey !== 'v1601e04_dp_v1_0_2r' || ! in_array(strtoupper(trim((string) ($this->config['_validated_firmware'] ?? ''))), $allowedFirmware, true)) {
+            throw new RuntimeException('ONU reboot requires the exact V1601E04-DP V1.0.2R CLI profile.');
+        }
+        $output = trim($this->runMany($this->commands('reboot_onu', compact('pon', 'onu'))));
+        if ($output === '') {
+            throw new RuntimeException('OLT closed or returned no CLI response after the reset request. Command acceptance cannot be confirmed.');
+        }
+        if (preg_match('/(?:unknown command|incomplete command|ambiguous command|command failed|no such onu|invalid (?:onu|command)|%\s*error)/i', $output)) {
+            throw new RuntimeException('OLT rejected the ONU reset command: '.mb_substr($output, 0, 500));
+        }
+        return $output;
     }
 
     public function disableOnu(string $pon, string $onu): string

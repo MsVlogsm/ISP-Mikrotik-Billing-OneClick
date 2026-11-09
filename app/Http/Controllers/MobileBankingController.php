@@ -11,15 +11,13 @@ class MobileBankingController extends Controller
     public function index()
     {
         $this->authorizeModule('payment-collection');
-        $online = CollectionSummary::query()->where(function ($q) {
-            $q->where('payment_type', 'online')
-                ->orWhereIn('payment_method', ['bkash', 'nagad', 'rocket', 'upay', 'sslcommerz']);
-        });
+        $mfs = CollectionSummary::query()
+            ->whereIn('payment_method', ['bkash', 'nagad', 'rocket', 'upay', 'sslcommerz']);
         return view('mobile-banking.index', [
             'tab' => 'overview',
             'stats' => [
-                ['label' => 'MFS Collections (30d)', 'value' => number_format((clone $online)->where('collection_date', '>=', now()->subDays(30))->sum('collection_amount'), 2)],
-                ['label' => 'Online Transactions (30d)', 'value' => (clone $online)->where('collection_date', '>=', now()->subDays(30))->count()],
+                ['label' => 'MFS Collections (30d)', 'value' => number_format((clone $mfs)->where('collection_date', '>=', now()->subDays(30))->sum('collection_amount'), 2)],
+                ['label' => 'MFS Transactions (30d)', 'value' => (clone $mfs)->where('collection_date', '>=', now()->subDays(30))->count()],
                 ['label' => 'bKash', 'value' => MainSiteData::getValue('payment_bkash_enabled', 0) ? 'Enabled' : 'Disabled'],
                 ['label' => 'Nagad', 'value' => MainSiteData::getValue('payment_nagad_enabled', 0) ? 'Enabled' : 'Disabled'],
             ],

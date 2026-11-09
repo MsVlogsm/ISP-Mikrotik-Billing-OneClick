@@ -48,7 +48,7 @@ class ManageRole extends Component
         $this->authorizeRoleManagement();
 
         $this->reset(['roleType', 'roleId', 'name', 'permissions']);
-        $this->permissionList = Permission::all();
+        $this->permissionList = Permission::query()->where('guard_name', 'web')->orderBy('name')->get();
         $this->roleType = 'Create New Role';
         $this->confirmingRole = true;
     }
@@ -74,7 +74,7 @@ class ManageRole extends Component
         $this->roleId = $roleId;
         $this->name = $this->role->name;
         $this->permissions = $this->role->permissions->pluck('id')->toArray();
-        $this->permissionList = Permission::all();
+        $this->permissionList = Permission::query()->where('guard_name', 'web')->orderBy('name')->get();
         $this->confirmingRole = true;
     }
 
@@ -85,7 +85,7 @@ class ManageRole extends Component
         $this->validate([
             'name' => 'required|string|unique:roles,name,'.($this->roleId ?? 'NULL').'|max:255',
             'permissions' => 'array',
-            'permissions.*' => 'integer|exists:permissions,id',
+            'permissions.*' => ['integer', \Illuminate\Validation\Rule::exists('permissions', 'id')->where(fn ($query) => $query->where('guard_name', 'web'))],
         ]);
 
         if ($this->roleId) {
@@ -187,7 +187,7 @@ class ManageRole extends Component
 
     public function render()
     {
-        $roles = Role::where('name', '!=', 'Reseller')->with('permissions')->orderBy('id')->paginate($this->perPage);
+        $roles = Role::where('guard_name', 'web')->where('name', '!=', 'Reseller')->with('permissions')->orderBy('id')->paginate($this->perPage);
 
         return view('livewire.admin.role.manage-role', [
             'roles' => $roles,

@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -211,6 +213,19 @@ class CustomersInfo extends Model
         return $query->whereNotNull('ppp_user_id');
     }
 
+    /** Physical ONU mappings this customer subscribes through (supports shared ONUs). */
+    public function oltOnuMappings(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            OltOnuCustomerMapping::class,
+            'olt_onu_customer_ppp_links',
+            'customer_id',
+            'olt_onu_customer_mapping_id'
+        )->withPivot([
+            'ppp_user_id', 'client_mac', 'source', 'status', 'first_seen_at', 'last_seen_at', 'notes',
+        ])->withTimestamps();
+    }
+
     public function pppUser()
     {
         return $this->belongsTo(PPPSecrets::class, 'ppp_user_id', 'id');
@@ -219,6 +234,22 @@ class CustomersInfo extends Model
     public function package()
     {
         return $this->belongsTo(PackageList::class, 'package_id', 'id');
+    }
+
+    /**
+     * Latest fresh optical reading for this customer through its ONU subscriber link.
+     * The physical ONU remains a single mapping row; multiple PPP customers share it.
+     */
+    public function latestOnuOpticalReading(): HasOne
+    {
+        $now = now();
+
+        return $this->hasOne(OltOnuCustomerPppLink::class, 'customer_id', 'id')
+            ->whereHas('onuMapping', function ($query) use ($now): void {
+                $query->whereNotNull('rx_power')
+                    ->whereBetween('opm_last_seen_at', [$now->copy()->subMinutes(30), $now]);
+            })
+            ->latestOfMany('updated_at');
     }
 
     public function customerAddress()
@@ -276,5 +307,42 @@ class CustomersInfo extends Model
     public function reseller()
     {
         return $this->belongsTo(Reseller::class, 'reseller_id');
+    }
+
+    protected static function booted(): void
+    {
+        static::created(function (self $customer): void {
+            app(\App\Services\IntegrationWebhookDispatcher::class)->dispatch('customer.created', [
+                'customer_id' => $customer->customer_unique_id,
+                'name' => $customer->customer_name,
+                'status' => $customer->status,
+                'created_at' => $customer->created_at?->toIso8601String(),
+            ]);
+        });
+
+        static::updated(function (self $customer): void {
+            if (! $customer->wasChanged(['customer_name', 'mobile', 'status', 'package_id', 'connection_date', 'address'])) return;
+
+            $previous = strtolower((string) $customer->getOriginal('status'));
+            $current = strtolower((string) $customer->status);
+            $event = in_array($current, ['disable', 'disabled', 'inactive'], true)
+                && in_array($previous, ['active', 'free'], true)
+                ? 'customer.suspended'
+                : 'customer.updated';
+
+            app(\App\Services\IntegrationWebhookDispatcher::class)->dispatch($event, [
+                'customer_id' => $customer->customer_unique_id,
+                'name' => $customer->customer_name,
+                'status' => $customer->status,
+                'updated_at' => $customer->updated_at?->toIso8601String(),
+            ]);
+        });
+
+        static::deleted(function (self $customer): void {
+            app(\App\Services\IntegrationWebhookDispatcher::class)->dispatch('customer.deleted', [
+                'customer_id' => $customer->customer_unique_id,
+                'deleted_at' => now()->toIso8601String(),
+            ]);
+        });
     }
 }

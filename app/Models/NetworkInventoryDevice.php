@@ -17,9 +17,13 @@ class NetworkInventoryDevice extends Model
         'last_checked_at', 'location', 'notes', 'olt_type_id', 'host', 'firmware', 'serial_no', 'web_protocol',
         'web_port', 'port', 'snmp_port', 'pon_ports', 'ge_ports', 'sfp_ports', 'sfp_plus_ports', 'connect_timeout', 'cli_timeout',
         'read_delay_ms', 'diagnostic_command', 'adapter_config', 'is_active', 'latitude', 'longitude',
-        'username', 'password', 'snmp_community', 'api_token', 'api_endpoint', 'snmp_version',
+        'username', 'password', 'enable_password', 'snmp_community', 'api_token', 'api_endpoint', 'snmp_version',
         'ssh_port', 'telnet_port', 'api_port', 'ssh_enabled', 'telnet_enabled', 'api_enabled',
         'provisioning_enabled',
+    ];
+
+    protected $hidden = [
+        'username', 'password', 'enable_password', 'snmp_community', 'api_token',
     ];
 
     protected $casts = [
@@ -61,6 +65,8 @@ class NetworkInventoryDevice extends Model
     public function getUsernameAttribute($value): ?string { return $this->decryptCredentialValue($value); }
     public function setPasswordAttribute($value): void { $this->attributes['password'] = $this->encryptCredentialValue($value); }
     public function getPasswordAttribute($value): ?string { return $this->decryptCredentialValue($value); }
+    public function setEnablePasswordAttribute($value): void { $this->attributes['enable_password'] = $this->encryptCredentialValue($value); }
+    public function getEnablePasswordAttribute($value): ?string { return $this->decryptCredentialValue($value); }
     public function setSnmpCommunityAttribute($value): void { $this->attributes['snmp_community'] = $this->encryptCredentialValue($value); }
     public function getSnmpCommunityAttribute($value): ?string { return $this->decryptCredentialValue($value); }
     public function setApiTokenAttribute($value): void { $this->attributes['api_token'] = $this->encryptCredentialValue($value); }

@@ -70,7 +70,7 @@ class ManageUser extends Component
 
     private function assignableRoleNames(User $actor): array
     {
-        $query = Role::query()->where('name', '!=', 'Reseller');
+        $query = Role::query()->where('guard_name', 'web')->where('name', '!=', 'Reseller');
 
         if (! $actor->hasRole('Super Admin')) {
             $allowedPermissions = $actor->getAllPermissions()->pluck('name')->all();
@@ -228,7 +228,7 @@ class ManageUser extends Component
             'mobile' => ['nullable', 'string', 'regex:/^01[3-9][0-9]{8}$/'],
             'address' => 'nullable|string|max:255',
             'roles' => 'required|array|min:1',
-            'roles.*' => 'required|string|distinct|exists:roles,name',
+            'roles.*' => 'required|string|distinct|exists:roles,name,guard_name,web',
         ];
 
         // Conditionally apply password rules

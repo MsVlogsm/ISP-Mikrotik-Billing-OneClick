@@ -5,10 +5,67 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
 
 class MainSiteData extends Model
 {
     use HasFactory;
+
+    private const ENCRYPTED_SETTING_TYPES = [
+        'site_secret_key',
+        'site_secret_value',
+        'payment_bkash_username',
+        'payment_bkash_password',
+        'payment_bkash_app_key',
+        'payment_bkash_app_secret',
+        'payment_nagad_merchant_id',
+        'payment_nagad_public_key',
+        'payment_nagad_private_key',
+        'payment_sslcommerz_store_id',
+        'payment_sslcommerz_store_password',
+    ];
+
+    public static function encryptedSettingTypes(): array
+    {
+        return self::ENCRYPTED_SETTING_TYPES;
+    }
+
+    public static function isEncryptedSetting(string $type): bool
+    {
+        return in_array($type, self::ENCRYPTED_SETTING_TYPES, true);
+    }
+
+    private static function decryptSettingValue(string $type, mixed $value): mixed
+    {
+        if (! self::isEncryptedSetting($type) || ! is_string($value)) {
+            return $value;
+        }
+
+        if (! str_starts_with($value, 'enc:v1:')) {
+            // Backward-compatible read of existing plaintext values.
+            return $value;
+        }
+
+        try {
+            return Crypt::decryptString(substr($value, 7));
+        } catch (\Throwable $exception) {
+            report($exception);
+            return null;
+        }
+    }
+
+    private static function encryptSettingValue(string $type, mixed $value): mixed
+    {
+        if (! self::isEncryptedSetting($type) || ! is_string($value) || trim($value) === '') {
+            return $value;
+        }
+
+        if (str_starts_with($value, 'enc:v1:')) {
+            return $value;
+        }
+
+        return 'enc:v1:'.Crypt::encryptString($value);
+    }
 
     protected $fillable = [
         'type',
@@ -20,6 +77,18 @@ class MainSiteData extends Model
      */
     public static function getValue(string $type, $default = null)
     {
+        // Sensitive values are decrypted directly from the database and are
+        // never placed in the long-lived shared settings cache.
+        if (self::isEncryptedSetting($type)) {
+            $record = self::where('type', $type)->first();
+
+            if (! $record) {
+                return $default;
+            }
+
+            return self::decryptSettingValue($type, $record->getRawOriginal('value'));
+        }
+
         try {
             $active = self::getActive();
             if (property_exists($active, $type)) {
@@ -38,8 +107,9 @@ class MainSiteData extends Model
         // Return array if JSON, otherwise string
         $raw = $record->getRawOriginal('value');
         $decoded = @json_decode($raw, true);
+        $value = (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) ? $decoded : $record->value;
 
-        return (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) ? $decoded : $record->value;
+        return self::decryptSettingValue($type, $value);
     }
 
     /**
@@ -47,6 +117,9 @@ class MainSiteData extends Model
      */
     public static function setValue(string $type, $value): self
     {
+        // Encrypt sensitive gateway/site credentials at rest before persistence.
+        $value = self::encryptSettingValue($type, $value);
+
         // Encode to JSON if array
         if (is_array($value)) {
             $value = json_encode($value);
@@ -74,7 +147,9 @@ class MainSiteData extends Model
                 $decoded = @json_decode($raw, true);
                 $value = (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) ? $decoded : $record->value;
                 $key = $record->type;
-                $data->$key = $value;
+                // Encrypted credentials are deliberately omitted from the
+                // persistent cache. getValue() reads them from storage directly.
+                $data->$key = self::isEncryptedSetting($key) ? null : $value;
             }
 
             // Defaults in case they don't exist in DB

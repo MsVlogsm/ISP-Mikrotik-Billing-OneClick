@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Models\BillingInfo;
 use App\Models\CustomersInfo;
 use App\Models\PackageList;
+use App\Models\PaymentSummary;
+use App\Models\CollectionSummary;
 use App\Models\PPPSecrets;
 use App\Models\Reseller;
 use App\Models\RouterList;
@@ -63,6 +65,7 @@ class BroadbandController extends Controller
         $leftStats = null;
 
         $onlineSessionStatus = null;
+        $livePppDetails = [];
         if ($status === 'online') {
             // Online Customers means a real MikroTik /ppp/active session, not an enabled account.
             // Always poll the live router sessions for this request. Do not reuse a cached
@@ -79,8 +82,17 @@ class BroadbandController extends Controller
                     // An empty response is a valid zero-session result; exceptions are not.
                     $successCount++;
                     foreach ($sessions as $session) {
-                        $username = trim((string) ($session['name'] ?? ''));
-                        if ($username !== '') $usersByRouter[(string) $router->router_name][mb_strtolower($username)] = true;
+                        if (! is_array($session)) continue;
+                        $username = trim((string) ($session['name'] ?? $session['user'] ?? $session['username'] ?? ''));
+                        if ($username === '') continue;
+                        $key = mb_strtolower($username);
+                        $usersByRouter[(string) $router->router_name][$key] = true;
+                        $address = $session['address'] ?? $session['remote-address'] ?? null;
+                        $mac = $session['caller-id'] ?? $session['caller_id'] ?? null;
+                        $livePppDetails[(string) $router->router_name][$key] = [
+                            'ip' => is_string($address) && filter_var($address, FILTER_VALIDATE_IP) ? $address : null,
+                            'mac' => is_string($mac) && preg_match('/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i', $mac) ? strtoupper($mac) : null,
+                        ];
                     }
                 } catch (\Throwable $e) {
                     \Log::warning('Online Customers live session read failed for '.$router->router_name.': '.$e->getMessage());
@@ -133,12 +145,49 @@ class BroadbandController extends Controller
 
         if ($status === 'unverified') $query->where(function ($q) { $q->whereNull('mobile')->orWhereNull('identification_no'); });
         if ($status === 'due') $query->whereHas('billing', fn ($q) => $q->where('due_amount', '>', 0));
+        $paidMonth = null;
         if ($status === 'paid') {
-            // Paid means a payment was recorded and the current balance is settled.
-            // A zero balance alone is not proof of payment (new/free customers can be zero).
-            $query->whereHas('billing', fn ($q) => $q
-                ->where('paid_amount', '>', 0)
-                ->where('due_amount', '<=', 0));
+            // BillingInfo is rolled forward at the start of each billing cycle and
+            // paid_amount is reset for the new month. Historical paid customers must
+            // therefore be calculated from that month's PaymentSummary + collections,
+            // not from the newly-reset BillingInfo row.
+            $requestedMonth = (string) $request->input('paid_month', '');
+            if (preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $requestedMonth)) {
+                $paidMonth = $requestedMonth;
+            } else {
+                $latestPaidDate = CollectionSummary::query()
+                    ->where('payment_status', 'paid')
+                    ->where('collection_amount', '>', 0)
+                    ->max('collection_date');
+                $paidMonth = $latestPaidDate
+                    ? Carbon::parse($latestPaidDate)->format('Y-m')
+                    : now()->format('Y-m');
+            }
+
+            $monthStart = Carbon::createFromFormat('!Y-m', $paidMonth)->startOfMonth();
+            $monthEnd = $monthStart->copy()->addMonth();
+            $monthStartValue = $monthStart->toDateString();
+            $monthEndValue = $monthEnd->toDateString();
+
+            $settledCustomerIds = PaymentSummary::query()
+                ->whereDate('summary_date', $monthStartValue)
+                ->whereRaw('(COALESCE(monthly_rent,0) + COALESCE(additional_charge,0) + COALESCE(vat,0) + COALESCE(previous_due,0) - COALESCE(discount,0) - COALESCE(advance,0)) > 0')
+                ->whereRaw(
+                    '(SELECT COALESCE(SUM(cs.collection_amount),0) FROM collection_summaries cs '
+                    .'WHERE cs.customer_collection_unique_id = payment_summaries.customer_payment_unique_id '
+                    .'AND cs.payment_status = ? AND cs.collection_date >= ? AND cs.collection_date < ?) '
+                    .'>= (COALESCE(monthly_rent,0) + COALESCE(additional_charge,0) + COALESCE(vat,0) + COALESCE(previous_due,0) - COALESCE(discount,0) - COALESCE(advance,0))',
+                    ['paid', $monthStartValue, $monthEndValue]
+                )
+                ->whereExists(function ($subquery) {
+                    $subquery->selectRaw('1')
+                        ->from('customers_infos as paid_customers')
+                        ->whereColumn('paid_customers.customer_unique_id', 'payment_summaries.customer_payment_unique_id')
+                        ->whereNull('paid_customers.deleted_at');
+                })
+                ->select('customer_payment_unique_id');
+
+            $query->whereIn('customer_unique_id', $settledCustomerIds);
         }
         if ($status === 'disabled') $query->whereIn('status', ['disable', 'temporary_disable']);
 
@@ -155,6 +204,42 @@ class BroadbandController extends Controller
         $rows = min(max((int) $request->input('rows', 50), 10), 500);
         $customers = $query->latest('id')->paginate($rows)->withQueryString();
 
+        // Attach router-reported PPPoE IP/MAC to each online customer by the exact
+        // router + username pair. Never infer an active IP from a pool name or stale IP.
+        foreach ($customers as $customer) {
+            $ppp = $customer->pppUser;
+            $routerName = trim((string) ($ppp?->router_name ?? ''));
+            $username = mb_strtolower(trim((string) ($ppp?->username ?? '')));
+            $live = $livePppDetails[$routerName][$username] ?? [];
+            $customer->setAttribute('live_ppp_ip', $live['ip'] ?? null);
+            $customer->setAttribute('live_ppp_mac', $live['mac'] ?? null);
+        }
+
+        // Join ONU optical readings only through the saved Customer ID mapping.
+        // A reading is considered current only when its OPM timestamp is <= 30 minutes old.
+        $pageCustomerIds = $customers->getCollection()->pluck('id')->filter()->unique()->values();
+        $opticalByCustomer = $pageCustomerIds->isNotEmpty()
+            ? \App\Models\OltOnuCustomerMapping::with('olt:id,name')
+                ->whereIn('customer_id', $pageCustomerIds)
+                ->whereNotNull('opm_last_seen_at')
+                ->where('opm_last_seen_at', '>=', now()->subMinutes(30))
+                ->whereNotNull('rx_power')
+                ->orderByDesc('opm_last_seen_at')
+                ->get(['id','olt_device_id','customer_id','onu_id','onu_mac','pon_port','rx_power','tx_power','opm_last_seen_at','status'])
+                ->unique('customer_id')->keyBy('customer_id')
+            : collect();
+
+        foreach ($customers as $customer) {
+            $optical = $opticalByCustomer->get($customer->id);
+            $customer->setAttribute('live_onu_rx_power', $optical?->rx_power !== null ? (float) $optical->rx_power : null);
+            $customer->setAttribute('live_onu_tx_power', $optical?->tx_power !== null ? (float) $optical->tx_power : null);
+            $customer->setAttribute('live_onu_id', $optical?->onu_id);
+            $customer->setAttribute('live_onu_mac', $optical?->onu_mac);
+            $customer->setAttribute('live_onu_pon', $optical?->pon_port);
+            $customer->setAttribute('live_onu_olt_name', $optical?->olt?->name);
+            $customer->setAttribute('live_onu_opm_at', $optical?->opm_last_seen_at);
+        }
+
         return view('xlink.broadband.customer-list', [
             'customers' => $customers,
             'mode' => $status ?: 'all',
@@ -163,6 +248,7 @@ class BroadbandController extends Controller
             'packages' => PackageList::orderBy('package')->get(),
             'leftStats' => $leftStats,
             'onlineSessionStatus' => $onlineSessionStatus,
+            'paidMonth' => $paidMonth,
         ]);
     }
 

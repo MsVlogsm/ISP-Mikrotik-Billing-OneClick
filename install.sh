@@ -9,7 +9,7 @@ BILLING_PORT="${BILLING_PORT:-8081}"
 PORTAL_PORT="${PORTAL_PORT:-8082}"
 DB_NAME="${DB_NAME:-isp_billing}"
 DB_USER="${DB_USER:-isp_billing}"
-PHP_VERSION="8.3"
+PHP_VERSION="8.5"
 NODE_MAJOR="22"
 
 log(){ printf '\n[ONE-CLICK] %s\n' "$*"; }
@@ -78,9 +78,9 @@ else
 fi
 
 PHP_VERSION_ACTUAL="$($PHP_BIN -r 'echo PHP_VERSION;')"
-update-alternatives --install /usr/bin/php php "$PHP_BIN" 83 >/dev/null
+update-alternatives --install /usr/bin/php php "$PHP_BIN" 85 >/dev/null
 update-alternatives --set php "$PHP_BIN" >/dev/null
-php -r 'exit(version_compare(PHP_VERSION, "8.3.0", ">=") ? 0 : 1);' || die "PHP 8.3+ is required; detected $PHP_VERSION_ACTUAL"
+php -r 'exit(version_compare(PHP_VERSION, "8.5.0", ">=") ? 0 : 1);' || die "PHP 8.5+ is required; detected $PHP_VERSION_ACTUAL"
 
 log "Installing Composer"
 if ! command -v composer >/dev/null 2>&1; then
@@ -198,7 +198,7 @@ php artisan config:cache
 php artisan route:cache
 php artisan view:cache
 
-# Laravel 12 exposes /up only when health routing is registered. Fail closed if the app cannot boot.
+# Laravel exposes /up only when health routing is registered. Fail closed if the app cannot boot.
 php artisan about >/dev/null
 
 log "Setting runtime permissions"

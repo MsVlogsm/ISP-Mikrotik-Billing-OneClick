@@ -5,12 +5,19 @@ namespace App\Http\Controllers;
 use App\Models\NetworkInventoryDevice;
 use App\Models\NetworkInventoryHealthCheck;
 use App\Models\OltMonitoringSnapshot;
+use App\Models\OltLiveMetricSnapshot;
+use App\Models\OltLiveMetricPort;
+use App\Services\Olt\OltLiveMetricsService;
 use App\Models\OltOnuCustomerMapping;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\View\View;
+use Illuminate\Support\Str;
+use Throwable;
 
 class OltDashboardController extends Controller
 {
@@ -26,6 +33,15 @@ class OltDashboardController extends Controller
             ->latest('checked_at')
             ->first();
 
+        $liveMetricSnapshot = OltLiveMetricSnapshot::where('olt_device_id', $device->id)
+            ->latest('sampled_at')->first();
+        $livePorts = $liveMetricSnapshot
+            ? OltLiveMetricPort::where('snapshot_id', $liveMetricSnapshot->id)->orderByRaw("CASE role WHEN 'pon' THEN 0 WHEN 'uplink_ge' THEN 1 WHEN 'uplink_sfp' THEN 2 ELSE 3 END")->orderBy('if_index')->get()
+            : collect();
+        $liveMetrics = (array) ($liveMetricSnapshot?->metrics ?? []);
+        $ponLivePorts = $livePorts->where('role', 'pon')->values();
+        $uplinkLivePorts = $livePorts->filter(fn ($port) => str_starts_with((string) $port->role, 'uplink_'))->values();
+
         $mappingBase = OltOnuCustomerMapping::where('olt_device_id', $device->id);
         $mappingCounts = (clone $mappingBase)->selectRaw(
             "COUNT(*) as total,
@@ -35,6 +51,30 @@ class OltDashboardController extends Controller
              SUM(CASE WHEN customer_id IS NOT NULL THEN 1 ELSE 0 END) as mapped_onus,
              COUNT(DISTINCT customer_id) as mapped_customers"
         )->first();
+        if (Schema::hasTable('olt_onu_customer_ppp_links')) {
+            $primaryMappedOnuIds = (clone $mappingBase)
+                ->whereNotNull('customer_id')
+                ->pluck('id');
+            $primaryMappedCustomerIds = (clone $mappingBase)
+                ->whereNotNull('customer_id')
+                ->pluck('customer_id');
+            $activeSharedLinks = DB::table('olt_onu_customer_ppp_links as links')
+                ->join('olt_onu_customer_mappings as mappings', 'mappings.id', '=', 'links.olt_onu_customer_mapping_id')
+                ->where('mappings.olt_device_id', $device->id)
+                ->where('links.status', 'active')
+                ->get(['mappings.id as mapping_id', 'links.customer_id']);
+
+            // Preserve legacy primary-only mappings while including all secondary
+            // subscriber links, even when an ONU has no legacy primary customer.
+            $mappingCounts->mapped_onus = $primaryMappedOnuIds
+                ->merge($activeSharedLinks->pluck('mapping_id'))
+                ->unique()
+                ->count();
+            $mappingCounts->mapped_customers = $primaryMappedCustomerIds
+                ->merge($activeSharedLinks->pluck('customer_id'))
+                ->unique()
+                ->count();
+        }
 
         $stats = [
             'total' => $latestSnapshot?->onu_total ?? $device->onu_total ?? (int) ($mappingCounts->total ?? 0),
@@ -110,7 +150,7 @@ class OltDashboardController extends Controller
         $search = trim((string) $request->query('q', ''));
         $status = trim((string) $request->query('status', ''));
 
-        $onusQuery = (clone $mappingBase)->with(['customer', 'pppUser'])
+        $onusQuery = (clone $mappingBase)->with(['customer', 'pppUser', 'subscriberLinks.customer', 'subscriberLinks.pppUser'])
             ->orderByRaw("CASE status WHEN 'online' THEN 0 WHEN 'offline' THEN 1 ELSE 2 END")
             ->orderBy('pon_port')
             ->orderBy('onu_id');
@@ -125,7 +165,12 @@ class OltDashboardController extends Controller
                         $customerQuery->where('customer_unique_id', 'like', "%{$search}%")
                             ->orWhere('customer_name', 'like', "%{$search}%");
                     })
-                    ->orWhereHas('pppUser', fn ($pppQuery) => $pppQuery->where('username', 'like', "%{$search}%"));
+                    ->orWhereHas('pppUser', fn ($pppQuery) => $pppQuery->where('username', 'like', "%{$search}%"))
+                    ->orWhereHas('subscriberLinks.customer', function ($customerQuery) use ($search) {
+                        $customerQuery->where('customer_unique_id', 'like', "%{$search}%")
+                            ->orWhere('customer_name', 'like', "%{$search}%");
+                    })
+                    ->orWhereHas('subscriberLinks.pppUser', fn ($pppQuery) => $pppQuery->where('username', 'like', "%{$search}%"));
             });
         }
         if (in_array($status, ['online', 'offline', 'unknown'], true)) {
@@ -160,6 +205,7 @@ class OltDashboardController extends Controller
             'last_latency_ms' => $device->last_latency_ms,
             'location' => $device->location,
             'health_status' => $device->health_status ?: $device->status,
+            'hardware_version' => data_get($device->adapter_config, 'hardware_version'),
         ];
 
         return view('xlink.olt-dashboard', compact(
@@ -167,6 +213,11 @@ class OltDashboardController extends Controller
             'stats',
             'latestSnapshot',
             'latestHealth',
+            'liveMetricSnapshot',
+            'livePorts',
+            'liveMetrics',
+            'ponLivePorts',
+            'uplinkLivePorts',
             'signalTotal',
             'signalPercentages',
             'charts',
@@ -192,6 +243,47 @@ class OltDashboardController extends Controller
             ->route('network-inventory.olt.dashboard', $device)
             ->with('olt_sync_success', $exitCode === 0)
             ->with('olt_sync_message', $output !== '' ? $output : 'ONU synchronization finished without additional output.');
+    }
+
+    public function pollMetrics(Request $request, NetworkInventoryDevice $device, OltLiveMetricsService $service): RedirectResponse
+    {
+        abort_unless($device->type === 'olt', 404);
+        try {
+            $snapshot = $service->poll($device);
+            $focusIfIndex = (int) $request->input('focus_if_index', 0);
+            $focusMessage = $focusIfIndex > 0 ? ' Selected ifIndex '.$focusIfIndex.' was included in the full-device poll.' : '';
+            $message = 'Live metrics saved at '.$snapshot->sampled_at->format('d M Y H:i:s')
+                .'. Interfaces: '.$snapshot->interface_count
+                .'; PON up: '.$snapshot->pon_up.'/'.($snapshot->pon_up + $snapshot->pon_down)
+                .'; ONU: '.$snapshot->onu_online.'/'.$snapshot->onu_total.' online'
+                .'; poll duration: '.$snapshot->poll_duration_ms.' ms.';
+            return redirect()->route('network-inventory.olt.dashboard', $device)
+                ->with('olt_metrics_success', true)->with('olt_metrics_message', $message);
+        } catch (Throwable $exception) {
+            report($exception);
+            return redirect()->route('network-inventory.olt.dashboard', $device)
+                ->with('olt_metrics_success', false)
+                ->with('olt_metrics_message', Str::limit($exception->getMessage(), 1200));
+        }
+    }
+
+    public function pollDiagnosticsMetrics(NetworkInventoryDevice $device, OltLiveMetricsService $service): RedirectResponse
+    {
+        abort_unless($device->type === 'olt', 404);
+        try {
+            $snapshot = $service->poll($device);
+            $message = 'Read-only live metrics saved at '.$snapshot->sampled_at->format('d M Y H:i:s')
+                .'. '.$snapshot->onu_online.'/'.$snapshot->onu_total.' ONU online; '
+                .$snapshot->pon_up.'/'.($snapshot->pon_up + $snapshot->pon_down).' PON up; '
+                .$snapshot->interface_count.' interfaces in '.$snapshot->poll_duration_ms.' ms.';
+            return redirect()->route('network-inventory.olt.diagnostics', $device)
+                ->with('diagnostic_metrics_success', true)->with('diagnostic_metrics_message', $message);
+        } catch (Throwable $exception) {
+            report($exception);
+            return redirect()->route('network-inventory.olt.diagnostics', $device)
+                ->with('diagnostic_metrics_success', false)
+                ->with('diagnostic_metrics_message', Str::limit($exception->getMessage(), 1200));
+        }
     }
 
     private function buildChart(

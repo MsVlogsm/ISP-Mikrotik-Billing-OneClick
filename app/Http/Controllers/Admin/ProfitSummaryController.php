@@ -21,7 +21,10 @@ class ProfitSummaryController extends Controller
         $to   = Carbon::create($year, $month, 1)->endOfMonth();
 
         // ── Revenue ───────────────────────────────────────────────
-        $collectionRevenue = CollectionSummary::whereBetween('collection_date', [$from, $to])
+        // Advance deposits are customer wallet liabilities until allocated to a bill.
+        $collectionRevenue = CollectionSummary::where(function ($query) {
+                $query->whereNull('payment_type')->orWhere('payment_type', '<>', 'advance');
+            })->whereBetween('collection_date', [$from, $to])
             ->sum('collection_amount');
 
         $hotspotRevenue = HotspotSale::whereBetween('sale_date', [$from, $to])
@@ -60,7 +63,9 @@ class ProfitSummaryController extends Controller
         $endDate   = Carbon::now()->endOfMonth();
 
         // 1. Collections sum by Year-Month
-        $collectionsByMonth = CollectionSummary::whereBetween('collection_date', [$startDate, $endDate])
+        $collectionsByMonth = CollectionSummary::where(function ($query) {
+                $query->whereNull('payment_type')->orWhere('payment_type', '<>', 'advance');
+            })->whereBetween('collection_date', [$startDate, $endDate])
             ->selectRaw("DATE_FORMAT(collection_date, '%Y-%m') as month_year, SUM(collection_amount) as total")
             ->groupBy('month_year')
             ->pluck('total', 'month_year')

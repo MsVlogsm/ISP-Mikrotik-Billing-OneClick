@@ -3,6 +3,17 @@
 return [
     // CLI provisioning profiles remain separate from the read-only SNMP MIB profiles.
     'profiles' => [
+        'v1601e04_dp_v1_0_2r' => [
+            'label' => 'VSOL V1601E04-DP / V1.0.2R ONU restart only',
+            'models' => ['V1601E04-DP'],
+            'transport' => 'ssh',
+            'firmware' => ['V1.0.2R'],
+            'commands' => [
+                // V-SOL V1600D-series CLI manual: enter the EPON PON interface,
+                // then issue the ONU CTC reset command for one numeric ONU ID.
+                'reboot_onu' => ['configure terminal', 'interface epon {{pon}}', 'onu {{onu}} ctc reset', 'exit', 'exit'],
+            ],
+        ],
         'v1600d_ep_series_v1_2' => [
             'label' => 'VSOL/UPLINK EP Series / V1600D CLI v1.2',
             'models' => ['V1600D'],
@@ -34,6 +45,13 @@ return [
                 'sysDescr' => '1.3.6.1.2.1.1.1.0',
                 'sysUpTime' => '1.3.6.1.2.1.1.3.0',
             ],
+            // Optional chassis probes. V1.0.2R is polled but these three
+            // instances are not exposed by the currently configured SNMP view.
+            'hardware_oids' => [
+                'cpu_percent' => '1.3.6.1.4.1.37950.1.1.5.10.1.1.1.0',
+                'memory_percent' => '1.3.6.1.4.1.37950.1.1.5.10.1.1.2.0',
+                'chassis_temp_c' => '1.3.6.1.4.1.37950.1.1.5.10.1.1.3.0',
+            ],
             'onu_oids' => [
                 // Live V1.0.2R authInfoTable is the exact MAC↔ONU-ID source.
                 // Columns: authInfoPonNo=.2, authInfoOnuNo=.3, LLID=.4,
@@ -49,6 +67,8 @@ return [
             'opm_oids' => [
                 'tx_power' => '1.3.6.1.4.1.37950.1.1.5.12.2.1.8.1.6',
                 'rx_power' => '1.3.6.1.4.1.37950.1.1.5.12.2.1.8.1.7',
+                // Live V1.0.2R distance table: index is .PON.ONU-ID, value is meters.
+                'distance_m' => '1.3.6.1.4.1.37950.1.1.5.12.1.25.1.17',
             ],
         ],
         'v1601e_epon_authinfo2' => [

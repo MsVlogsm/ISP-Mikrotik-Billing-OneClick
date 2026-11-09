@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Payment;
 
 use App\Http\Controllers\Controller;
 use App\Models\CustomersInfo;
+use App\Models\PaymentGatewayAttempt;
 use App\Services\PaymentService;
+use Illuminate\Support\Str;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -77,6 +79,18 @@ class BkashPaymentController extends Controller
             return $this->showMockPaymentPage('bKash', $customer, $amount);
         }
 
+        $merchantInvoiceNumber = 'XLK'.Str::upper(Str::random(16));
+        $attempt = PaymentGatewayAttempt::create([
+            'gateway' => 'bkash',
+            'customer_unique_id' => $customer->customer_unique_id,
+            'amount' => round((float) $amount, 2),
+            'currency' => 'BDT',
+            'merchant_reference' => $merchantInvoiceNumber,
+            'status' => 'initiated',
+            'expires_at' => now()->addDay(),
+            'next_poll_at' => now()->addMinute(),
+        ]);
+
         try {
             $idToken = $this->generateToken();
             $config = $this->getBkashConfig();
@@ -91,7 +105,7 @@ class BkashPaymentController extends Controller
                     'payerReference' => $customer->customer_unique_id,
                     'callbackURL' => $callbackURL,
                     'amount' => (string) round($amount, 2),
-                    'merchantInvoiceNumber' => 'INV_'.uniqid(),
+                    'merchantInvoiceNumber' => $merchantInvoiceNumber,
                     'intent' => 'sale',
                 ];
             } else {
@@ -100,7 +114,7 @@ class BkashPaymentController extends Controller
                     'amount' => (string) round($amount, 2),
                     'currency' => 'BDT',
                     'intent' => 'sale',
-                    'merchantInvoiceNumber' => 'INV_'.uniqid(),
+                    'merchantInvoiceNumber' => $merchantInvoiceNumber,
                     'callbackURL' => $callbackURL,
                 ];
             }
@@ -114,10 +128,29 @@ class BkashPaymentController extends Controller
             $res = $payment->json();
 
             if (isset($res['bkashURL'])) {
-                session(['bkash_amount' => $amount, 'bkash_customer_id' => $customer->id]);
+                $providerPaymentId = (string) ($res['paymentID'] ?? $res['paymentId'] ?? '');
+                $attempt->forceFill([
+                    'provider_reference' => $providerPaymentId !== '' ? $providerPaymentId : null,
+                    'status' => $providerPaymentId !== '' ? 'pending' : 'needs_review',
+                    'next_poll_at' => $providerPaymentId !== '' ? now()->addMinute() : null,
+                    'last_error' => $providerPaymentId === '' ? 'bKash checkout response did not include a payment ID.' : null,
+                    'provider_metadata' => ['api_type' => $apiType],
+                ])->save();
+
+                session([
+                    'bkash_amount' => $amount,
+                    'bkash_customer_id' => $customer->id,
+                    'bkash_attempt_uuid' => $attempt->attempt_uuid,
+                ]);
 
                 return redirect()->away($res['bkashURL']);
             }
+
+            $attempt->forceFill([
+                'status' => 'failed',
+                'next_poll_at' => null,
+                'last_error' => 'bKash rejected the checkout session request.',
+            ])->save();
 
             Log::error('bKash Create Payment Failed: '.json_encode($res));
 
@@ -130,6 +163,15 @@ class BkashPaymentController extends Controller
                 ->with('error', 'bKash payment initiation failed: '.($res['errorMessage'] ?? 'Unknown error'));
 
         } catch (\Exception $e) {
+            $attempt->refresh();
+            if ($attempt->status === 'initiated') {
+                $attempt->forceFill([
+                    'status' => 'needs_review',
+                    'next_poll_at' => null,
+                    'last_error' => 'Checkout initiation outcome is unknown; no provider payment ID was returned.',
+                ])->save();
+            }
+
             Log::error('bKash initiate exception: '.$e->getMessage());
 
             if ($isLocal) {
@@ -145,6 +187,15 @@ class BkashPaymentController extends Controller
     {
         $status = strtolower(trim((string) $request->query('status', '')));
         $paymentID = trim((string) $request->query('paymentID', ''));
+        $attempt = $paymentID !== ''
+            ? PaymentGatewayAttempt::query()->where('gateway', 'bkash')->where('provider_reference', $paymentID)->first()
+            : null;
+        if (! $attempt && session('bkash_attempt_uuid')) {
+            $attempt = PaymentGatewayAttempt::query()
+                ->where('attempt_uuid', session('bkash_attempt_uuid'))
+                ->where('gateway', 'bkash')
+                ->first();
+        }
 
         if ($status === 'success' && $paymentID !== '') {
             try {
@@ -166,26 +217,44 @@ class BkashPaymentController extends Controller
 
                 $res = $execution->json();
 
-                if (isset($res['statusCode']) && $res['statusCode'] === '0000') {
-                    $trxID = $res['trxID'] ?? 'BKASH_'.uniqid();
-                    $amount = (float) $res['amount'];
-                    
-                    // Search customer by payerReference or session fallback
-                    $customerUniqueId = $res['payerReference'] ?? null;
-                    $customer = null;
-                    if ($customerUniqueId) {
+                if (isset($res['statusCode']) && $res['statusCode'] === '0000'
+                    && strtolower((string) ($res['transactionStatus'] ?? '')) === 'completed') {
+                    $trxID = trim((string) ($res['trxID'] ?? ''));
+                    $amount = is_numeric($res['amount'] ?? null) ? (float) $res['amount'] : 0.0;
+
+                    $customer = $attempt
+                        ? CustomersInfo::where('customer_unique_id', $attempt->customer_unique_id)->first()
+                        : null;
+
+                    $customerUniqueId = (string) ($res['payerReference'] ?? '');
+                    if (! $customer && $customerUniqueId !== '') {
                         $customer = CustomersInfo::where('customer_unique_id', $customerUniqueId)->first();
                     }
 
-                    if (! $customer) {
-                        $sessionCustomerId = session('bkash_customer_id');
-                        if ($sessionCustomerId) {
-                            $customer = CustomersInfo::find($sessionCustomerId);
-                        }
+                    if (! $customer && session('bkash_customer_id')) {
+                        $customer = CustomersInfo::find(session('bkash_customer_id'));
                     }
 
-                    if ($customer) {
-                        $processed = $this->paymentService->processSuccessPayment($customer, $amount, 'bkash', $trxID);
+                    $responseInvoice = (string) ($res['merchantInvoiceNumber'] ?? $res['merchantInvoice'] ?? '');
+                    $responseCurrency = strtoupper((string) ($res['currency'] ?? 'BDT'));
+                    $attemptMatches = ! $attempt || (
+                        abs($amount - (float) $attempt->amount) <= 0.009
+                        && $customerUniqueId !== ''
+                        && hash_equals((string) $attempt->customer_unique_id, $customerUniqueId)
+                        && $responseInvoice !== ''
+                        && hash_equals((string) $attempt->merchant_reference, $responseInvoice)
+                        && $responseCurrency === 'BDT'
+                        && ($attempt->provider_reference === null || hash_equals((string) $attempt->provider_reference, $paymentID))
+                    );
+
+                    if ($customer && $attemptMatches && $trxID !== '' && $amount > 0) {
+                        $metadata = $attempt ? [
+                            'source' => 'bkash_callback',
+                            'payment_attempt_id' => $attempt->id,
+                            'external_invoice_id' => $attempt->merchant_reference,
+                            'verified_gateway_callback' => true,
+                        ] : [];
+                        $processed = $this->paymentService->processSuccessPayment($customer, $amount, 'bkash', $trxID, $metadata);
 
                         if (! $processed) {
                             return redirect()->route('filament.portal.pages.dashboard')
@@ -197,7 +266,19 @@ class BkashPaymentController extends Controller
                     }
                 }
 
-                Log::error('bKash Execution Failed: '.json_encode($res));
+                if ($attempt && $attempt->status !== 'paid') {
+                    $attempt->forceFill([
+                        'status' => 'needs_review',
+                        'next_poll_at' => null,
+                        'last_error' => 'bKash callback response was not a verified Completed transaction or did not match the stored checkout.',
+                    ])->save();
+                }
+
+                Log::warning('bKash Execution Failed or did not match the stored checkout.', [
+                    'attempt_id' => $attempt?->id,
+                    'status_code' => $res['statusCode'] ?? null,
+                    'transaction_status' => $res['transactionStatus'] ?? null,
+                ]);
 
                 return redirect()->route('filament.portal.pages.pay-bill')
                     ->with('error', 'Payment verification failed. Please try again or contact support.');
@@ -208,6 +289,14 @@ class BkashPaymentController extends Controller
                 return redirect()->route('filament.portal.pages.pay-bill')
                     ->with('error', 'Payment verification is temporarily unavailable. Please try again.');
             }
+        }
+
+        if ($attempt && $attempt->status !== 'paid') {
+            $attempt->forceFill([
+                'status' => 'cancelled',
+                'next_poll_at' => null,
+                'last_error' => 'Customer returned from bKash without a successful payment callback.',
+            ])->save();
         }
 
         return redirect()->route('filament.portal.pages.pay-bill')

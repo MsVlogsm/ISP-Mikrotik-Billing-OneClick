@@ -123,8 +123,10 @@ class MainSiteSetup extends Component implements HasActions, HasForms
             'expired_profile_name' => MainSiteData::getValue('expired_profile_name', 'Expired'),
 
             // Security / Secrets
-            'site_secret_key' => MainSiteData::getValue('site_secret_key'),
-            'site_secret_value' => MainSiteData::getValue('site_secret_value'),
+            // Never hydrate stored secrets into the Livewire browser snapshot.
+            // Blank means "keep existing"; enter a new value to rotate a credential.
+            'site_secret_key' => null,
+            'site_secret_value' => null,
             'site_secret_validity' => MainSiteData::getValue('site_secret_validity'),
             'site_secret_url' => MainSiteData::getValue('site_secret_url'),
             'site_secret_email' => MainSiteData::getValue('site_secret_email'),
@@ -139,22 +141,33 @@ class MainSiteSetup extends Component implements HasActions, HasForms
             // Payment Gateways
             'payment_bkash_enabled' => MainSiteData::getValue('payment_bkash_enabled', 0) ? 1 : 0,
             'payment_bkash_base_url' => MainSiteData::getValue('payment_bkash_base_url', 'https://tokenized.sandbox.bka.sh/v1.2.0-beta'),
-            'payment_bkash_username' => MainSiteData::getValue('payment_bkash_username'),
-            'payment_bkash_password' => MainSiteData::getValue('payment_bkash_password'),
-            'payment_bkash_app_key' => MainSiteData::getValue('payment_bkash_app_key'),
-            'payment_bkash_app_secret' => MainSiteData::getValue('payment_bkash_app_secret'),
+            'payment_bkash_username' => null,
+            'payment_bkash_password' => null,
+            'payment_bkash_app_key' => null,
+            'payment_bkash_app_secret' => null,
             'payment_bkash_api_type' => MainSiteData::getValue('payment_bkash_api_type', 'tokenized'),
+            'payment_bkash_credentials_ready' => filled(MainSiteData::getValue('payment_bkash_username'))
+                && filled(MainSiteData::getValue('payment_bkash_password'))
+                && filled(MainSiteData::getValue('payment_bkash_app_key'))
+                && filled(MainSiteData::getValue('payment_bkash_app_secret'))
+                && str_starts_with((string) MainSiteData::getValue('payment_bkash_base_url', ''), 'https://'),
 
             'payment_nagad_enabled' => MainSiteData::getValue('payment_nagad_enabled', 0) ? 1 : 0,
             'payment_nagad_base_url' => MainSiteData::getValue('payment_nagad_base_url', 'http://sandbox.nagad.com.bd:10080/remote-payment-gateway-1.0/api/dfs'),
-            'payment_nagad_merchant_id' => MainSiteData::getValue('payment_nagad_merchant_id'),
-            'payment_nagad_public_key' => MainSiteData::getValue('payment_nagad_public_key'),
-            'payment_nagad_private_key' => MainSiteData::getValue('payment_nagad_private_key'),
+            'payment_nagad_merchant_id' => null,
+            'payment_nagad_public_key' => null,
+            'payment_nagad_private_key' => null,
+            'payment_nagad_credentials_ready' => filled(MainSiteData::getValue('payment_nagad_merchant_id'))
+                && filled(MainSiteData::getValue('payment_nagad_public_key'))
+                && filled(MainSiteData::getValue('payment_nagad_private_key'))
+                && str_starts_with((string) MainSiteData::getValue('payment_nagad_base_url', ''), 'https://'),
 
             'payment_sslcommerz_enabled' => MainSiteData::getValue('payment_sslcommerz_enabled', 0) ? 1 : 0,
-            'payment_sslcommerz_store_id' => MainSiteData::getValue('payment_sslcommerz_store_id'),
-            'payment_sslcommerz_store_password' => MainSiteData::getValue('payment_sslcommerz_store_password'),
+            'payment_sslcommerz_store_id' => null,
+            'payment_sslcommerz_store_password' => null,
             'payment_sslcommerz_sandbox' => MainSiteData::getValue('payment_sslcommerz_sandbox', 1) ? 1 : 0,
+            'payment_sslcommerz_credentials_ready' => filled(MainSiteData::getValue('payment_sslcommerz_store_id'))
+                && filled(MainSiteData::getValue('payment_sslcommerz_store_password')),
 
             // Dynamic Web Content (MainSiteData unique)
             'hero_title' => MainSiteData::getValue('hero_title'),
@@ -182,7 +195,12 @@ class MainSiteSetup extends Component implements HasActions, HasForms
             'btcl_tariff_link' => MainSiteData::getValue('btcl_tariff_link', '#'),
             'btcl_tariff_pdf' => MainSiteData::getValue('btcl_tariff_pdf'),
             'important_links' => MainSiteData::getValue('important_links', []),
-            'all_data' => MainSiteData::all()->toArray(),
+            // Do not include encrypted or legacy plaintext credentials in the
+            // public Livewire state payload used by the generic settings editor.
+            'all_data' => MainSiteData::query()
+                ->whereNotIn('type', MainSiteData::encryptedSettingTypes())
+                ->get()
+                ->toArray(),
         ];
         // Format single file uploads as arrays with a UUID key to satisfy Filament's FileUpload component
         foreach ($this->getSingleFileUploadFields() as $field) {
@@ -455,6 +473,13 @@ class MainSiteSetup extends Component implements HasActions, HasForms
             foreach ($keys as $key) {
                 if (array_key_exists($key, $settingsToSave)) {
                     $value = $settingsToSave[$key];
+
+                    // Empty secret inputs preserve the stored credential. They are
+                    // intentionally blank in Livewire state to avoid browser exposure.
+                    if (MainSiteData::isEncryptedSetting($key) && blank($value)) {
+                        continue;
+                    }
+
                     // File upload state was normalized only in the persistence copy above.
                     MainSiteData::setValue($key, $value);
                 }

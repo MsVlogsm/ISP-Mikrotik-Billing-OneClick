@@ -122,8 +122,18 @@ class EnforceModulePermissions
             return 'mikrotik-setup';
         }
 
+        // SMS Bridge stores provider credentials and can trigger test messages.
+        // Keep every bridge endpoint behind the same global settings boundary.
+        if ($path === 'sms-bridge' || str_starts_with($path, 'sms-bridge/')) {
+            return 'site-setup';
+        }
         if ($path === 'sms-service' || str_starts_with($path, 'sms-service/')) {
             return 'site-setup';
+        }
+
+        // AI Engineer exposes customer/network diagnostics and can mutate ONU mappings.
+        if ($path === 'ai-engineer' || str_starts_with($path, 'ai-engineer/')) {
+            return ['network-inventory', 'mikrotik-setup'];
         }
 
         if ($path === 'company-settings' || str_starts_with($path, 'company-settings/')) {
@@ -141,11 +151,69 @@ class EnforceModulePermissions
         if ($path === 'communication-center/settings') {
             return 'site-setup';
         }
-        if ($path === 'mobile-banking' || str_starts_with($path, 'mobile-banking/')) {
+        // Match the controller's per-action permissions so payment operators are
+        // not accidentally blocked by the global settings permission.
+        if ($path === 'mobile-banking') {
+            return 'payment-collection';
+        }
+        if ($path === 'mobile-banking/logs') {
+            return 'payment-history';
+        }
+        if (in_array($path, ['mobile-banking/gateways', 'mobile-banking/methods'], true)) {
+            return 'payment-setup';
+        }
+        if ($path === 'mobile-banking/settings') {
+            return 'site-settings';
+        }
+        if (str_starts_with($path, 'mobile-banking/')) {
             return 'site-setup';
         }
         if (in_array($path, ['communication-center', 'communication-center/chat', 'communication-center/whatsapp'], true)) {
             return ['view-tickets', 'manage-tickets'];
+        }
+
+        // Broadband controller pages return customer and network-linked records;
+        // enforce the same permissions as the primary Customer List component.
+        if (in_array($path, [
+            'broadband/customers',
+            'broadband/customer-search',
+            'broadband/online-customers',
+            'broadband/due-customers',
+            'broadband/paid-customers',
+            'broadband/inactive-customers',
+            'broadband/new-customers',
+            'broadband/unverified-customers',
+        ], true)) {
+            return ['view-customer', 'all-customer'];
+        }
+        if ($path === 'broadband/packages') {
+            return 'package-setup';
+        }
+        if ($path === 'broadband/customer-package-import') {
+            return 'create-customer';
+        }
+        if (preg_match('#^broadband/customers/\\d+/ping$#', $path)
+            || preg_match('#^broadband/customers/\\d+/traffic$#', $path)) {
+            return 'mikrotik-setup';
+        }
+        if ($method === 'DELETE' && preg_match('#^broadband/customers/\\d+$#', $path)) {
+            return 'delete-customer';
+        }
+        if ($method === 'POST' && preg_match('#^broadband/customers/\\d+/disable$#', $path)) {
+            return 'disable-customer';
+        }
+        if ($method === 'PATCH' && preg_match('#^broadband/customers/\\d+/left-details$#', $path)) {
+            return 'edit-customer';
+        }
+
+        if ($path === 'billing-finance/advance-payments') {
+            return $method === 'GET' ? 'payment-collection' : 'payment-collection-edit';
+        }
+        if ($path === 'billing-finance/advance-payments/deposit') {
+            return 'payment-collection';
+        }
+        if ($path === 'billing-finance/advance-payments/allocate') {
+            return 'payment-collection-edit';
         }
 
         if ($path === 'payment-collection') {

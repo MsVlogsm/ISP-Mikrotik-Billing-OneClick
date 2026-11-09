@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\BillingInfo;
 use App\Models\CollectionSummary;
+use App\Models\CustomerAdvanceWallet;
+use App\Models\CustomerAdvanceTransaction;
 use App\Models\CustomersInfo;
 use App\Models\HotspotSale;
 use App\Models\IspExpense;
@@ -31,12 +33,20 @@ class BillingFinanceDashboardController extends Controller
         $driver = DB::connection()->getDriverName();
         $currency = siteUrlSettings('site_currency') ?: '৳';
 
-        $collectionToday = (float) CollectionSummary::whereBetween('collection_date', [$todayStart, $todayEnd])->sum('collection_amount');
+        // Customer advance deposits are cash received but remain customer credit,
+        // not earned/current-bill revenue. Their totals are shown in separate wallet KPIs.
+        $collectionToday = (float) CollectionSummary::where(function ($query) {
+                $query->whereNull('payment_type')->orWhere('payment_type', '<>', 'advance');
+            })->whereBetween('collection_date', [$todayStart, $todayEnd])->sum('collection_amount');
         $hotspotToday = (float) HotspotSale::whereDate('sale_date', $todayDate)->sum('amount');
 
-        $collectionMonth = (float) CollectionSummary::whereBetween('collection_date', [$monthStart, $monthEnd])->sum('collection_amount');
+        $collectionMonth = (float) CollectionSummary::where(function ($query) {
+                $query->whereNull('payment_type')->orWhere('payment_type', '<>', 'advance');
+            })->whereBetween('collection_date', [$monthStart, $monthEnd])->sum('collection_amount');
         $hotspotMonth = (float) HotspotSale::whereBetween('sale_date', [$monthStartDate, $monthEndDate])->sum('amount');
-        $collectionYear = (float) CollectionSummary::whereBetween('collection_date', [$yearStart, $todayEnd])->sum('collection_amount');
+        $collectionYear = (float) CollectionSummary::where(function ($query) {
+                $query->whereNull('payment_type')->orWhere('payment_type', '<>', 'advance');
+            })->whereBetween('collection_date', [$yearStart, $todayEnd])->sum('collection_amount');
         $hotspotYear = (float) HotspotSale::whereBetween('sale_date', [$yearStartDate, $todayDate])->sum('amount');
 
         $expenseMonth = (float) IspExpense::whereBetween('expense_date', [$monthStartDate, $monthEndDate])->sum('amount');
@@ -46,6 +56,13 @@ class BillingFinanceDashboardController extends Controller
             ->whereNull('customers_infos.deleted_at')
             ->where('customers_infos.status', 'active')
             ->sum('billing_infos.monthly_rent');
+
+        $advanceBalanceTotal = (float) CustomerAdvanceWallet::sum('balance');
+        $advanceWalletCustomers = CustomerAdvanceWallet::where('balance', '>', 0)->count();
+        $advanceDepositsMonth = (float) CustomerAdvanceTransaction::where('entry_type', 'deposit')
+            ->whereBetween('created_at', [$monthStart, $monthEnd])->sum('amount');
+        $advanceUtilizedMonth = (float) CustomerAdvanceTransaction::where('entry_type', 'allocation')
+            ->where('bill_month', $now->format('Y-m'))->sum('amount');
 
         $outstandingDue = (float) BillingInfo::join('customers_infos', 'billing_infos.customer_bill_unique_id', '=', 'customers_infos.customer_unique_id')
             ->whereNull('customers_infos.deleted_at')
@@ -76,7 +93,9 @@ class BillingFinanceDashboardController extends Controller
             ? "strftime('%Y-%m', created_at)"
             : "DATE_FORMAT(created_at, '%Y-%m')";
 
-        $collectionsByMonth = CollectionSummary::whereBetween('collection_date', [$trendStart, $monthEnd])
+        $collectionsByMonth = CollectionSummary::where(function ($query) {
+                $query->whereNull('payment_type')->orWhere('payment_type', '<>', 'advance');
+            })->whereBetween('collection_date', [$trendStart, $monthEnd])
             ->selectRaw($collectionMonthExpression.' as month_key, SUM(collection_amount) as total')
             ->groupBy('month_key')->pluck('total', 'month_key')->toArray();
 
@@ -107,12 +126,16 @@ class BillingFinanceDashboardController extends Controller
         }
         $trendMax = max(1, ...array_map(fn ($row) => max($row['revenue'], $row['expenses']), $trend));
 
-        $paymentMethods = CollectionSummary::whereBetween('collection_date', [$monthStart, $monthEnd])
+        $paymentMethods = CollectionSummary::where(function ($query) {
+                $query->whereNull('payment_type')->orWhere('payment_type', '<>', 'advance');
+            })->whereBetween('collection_date', [$monthStart, $monthEnd])
             ->selectRaw("COALESCE(NULLIF(payment_method, ''), 'Other') as method, SUM(collection_amount) as total")
             ->groupBy('method')->orderByDesc('total')->limit(5)->get();
 
         $recentCollections = CollectionSummary::with('customer')
-            ->whereBetween('collection_date', [$monthStart, $monthEnd])
+            ->where(function ($query) {
+                $query->whereNull('payment_type')->orWhere('payment_type', '<>', 'advance');
+            })->whereBetween('collection_date', [$monthStart, $monthEnd])
             ->latest('collection_date')->latest('id')->limit(7)->get();
 
         $topDueCustomers = BillingInfo::with('customer')
@@ -127,7 +150,8 @@ class BillingFinanceDashboardController extends Controller
         return view('billing.finance-hub', compact(
             'now', 'currency', 'collectionToday', 'hotspotToday', 'collectionMonth', 'hotspotMonth',
             'collectionYear', 'hotspotYear', 'expenseMonth', 'commissionMonth', 'monthlyRent',
-            'outstandingDue', 'dueCustomersCount', 'activeCustomersCount', 'monthRevenue',
+            'outstandingDue', 'dueCustomersCount', 'activeCustomersCount', 'advanceBalanceTotal',
+            'advanceWalletCustomers', 'advanceDepositsMonth', 'advanceUtilizedMonth', 'monthRevenue',
             'monthCosts', 'monthNet', 'netMargin', 'yearRevenue', 'trend', 'trendMax',
             'paymentMethods', 'recentCollections', 'topDueCustomers', 'recentExpenses'
         ));

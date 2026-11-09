@@ -25,6 +25,7 @@
         "vite": "^6.4.2"
     },
     "dependencies": {
+        "@geoman-io/leaflet-geoman-free": "^2.20.2",
         "@popperjs/core": "^2.11.8",
         "apextree": "^1.3.0",
         "bootstrap": "^5.3.8",
@@ -49,6 +50,7 @@
         "intl-tel-input": "^29.1.2",
         "jquery": "^3.7.1",
         "jszip": "^3.10.1",
+        "leaflet": "1.9.4",
         "maplibre-gl": "6.15.0",
         "moment": "^2.30.1",
         "moment-timezone": "^0.5.48",

@@ -136,9 +136,16 @@ Schedule::call(fn () => $runCommand(
 Schedule::call(fn () => $runCommand(
     'onu-mapping-sync',
     'OLT / ONU Mapping & Telemetry Sync',
-    'Every minute',
+    'Every 5 minutes',
     'olt:sync-onu-mappings'
-))->everyMinute()->timezone($timezone)->name('onu-mapping-sync')->withoutOverlapping()->onOneServer();
+))->everyFiveMinutes()->timezone($timezone)->name('onu-mapping-sync')->withoutOverlapping()->onOneServer();
+
+Schedule::call(fn () => $runCommand(
+    'olt-live-metrics-sync',
+    'OLT Live Metrics / IF-MIB / Hardware Telemetry',
+    'Every 5 minutes',
+    'olt:poll-live-metrics'
+))->everyFiveMinutes()->timezone($timezone)->name('olt-live-metrics-sync')->withoutOverlapping();
 
 Schedule::call(fn () => $runCommand(
     'customer-connection-snapshots',
@@ -146,6 +153,13 @@ Schedule::call(fn () => $runCommand(
     'Every 5 minutes',
     'app:capture-customer-connection-snapshots'
 ))->everyFiveMinutes()->timezone($timezone)->name('customer-connection-snapshots')->withoutOverlapping();
+
+Schedule::call(fn () => $runCommand(
+    'payment-transaction-reconciliation',
+    'Payment Gateway Transaction Reconciliation',
+    'Every minute',
+    'payment:reconcile-transactions --limit=25'
+))->everyMinute()->timezone($timezone)->name('payment-transaction-reconciliation')->withoutOverlapping(5);
 
 Schedule::call(fn () => $runCommand(
     'due-call-reminders',
@@ -164,6 +178,13 @@ Schedule::call(fn () => $track(
         return ['message' => 'Heartbeat queued. Worker execution is verified separately.'];
     }
 ))->everyFiveMinutes()->timezone($timezone)->name('queue-heartbeat-dispatch')->withoutOverlapping();
+
+Schedule::call(fn () => $track(
+    'ipilot-zabbix-sync',
+    'iPilot Zabbix Monitoring Sync',
+    'Every 5 minutes',
+    fn () => app(\App\Services\ZabbixMonitoringService::class)->syncAll()
+))->everyFiveMinutes()->timezone($timezone)->name('ipilot-zabbix-sync')->withoutOverlapping()->onOneServer();
 
 Schedule::call(fn () => $track(
     'data-integrity-audit',

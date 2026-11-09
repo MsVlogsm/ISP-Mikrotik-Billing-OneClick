@@ -45,8 +45,15 @@ class ApiV1Controller extends Controller
         }
 
         $page = $query->paginate($perPage)->withQueryString();
+        $user = $request->user();
+        $isSuperAdmin = $user?->hasRole('Super Admin') ?? false;
+        $permissionNames = $user?->getAllPermissions()->pluck('name')->all() ?? [];
+        $includeContact = $isSuperAdmin || in_array('customer-official-info', $permissionNames, true);
+        $includePppoe = $isSuperAdmin || count(array_intersect(['customer-server-info', 'mikrotik-setup'], $permissionNames)) > 0;
+        $includeBilling = $isSuperAdmin || count(array_intersect(['customer-billing-info', 'payment-collection-report', 'payment-history'], $permissionNames)) > 0;
+        $includePackage = $isSuperAdmin || in_array('package-setup', $permissionNames, true);
 
-        $data = $page->getCollection()->map(function (CustomersInfo $customer): array {
+        $data = $page->getCollection()->map(function (CustomersInfo $customer) use ($includeContact, $includePppoe, $includeBilling, $includePackage): array {
             $ppp = $customer->pppUser;
             $billing = $customer->billing;
             $package = $customer->package;
@@ -54,12 +61,12 @@ class ApiV1Controller extends Controller
             return [
                 'customerId' => $customer->customer_unique_id,
                 'name' => $customer->customer_name,
-                'mobile' => $customer->mobile,
-                'email' => $customer->email,
-                'address' => $customer->address,
+                'mobile' => $includeContact ? $customer->mobile : null,
+                'email' => $includeContact ? $customer->email : null,
+                'address' => $includeContact ? $customer->address : null,
                 'status' => $customer->status,
                 'connectionDate' => $customer->connection_date,
-                'pppoe' => $ppp ? [
+                'pppoe' => $includePppoe && $ppp ? [
                     'username' => $ppp->username,
                     'routerName' => $ppp->router_name,
                     'service' => $ppp->service,
@@ -67,12 +74,12 @@ class ApiV1Controller extends Controller
                     'status' => $ppp->status,
                     'remoteIp' => $ppp->ppp_remote_ip,
                 ] : null,
-                'package' => $package ? [
+                'package' => $includePackage && $package ? [
                     'id' => $package->id,
                     'name' => $package->package,
                     'price' => $package->price,
                 ] : null,
-                'billing' => $billing ? [
+                'billing' => $includeBilling && $billing ? [
                     'monthlyRent' => (float) $billing->monthly_rent,
                     'dueAmount' => (float) $billing->due_amount,
                     'expiryDate' => $billing->auto_disable_date,
@@ -246,6 +253,16 @@ class ApiV1Controller extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'This API token does not have permission for this operation.',
+            ], 403);
+        }
+
+        // Re-check current module access so revoked staff permissions also
+        // invalidate previously issued mobile API tokens.
+        if (! $user->hasRole('Super Admin') && ! $user->hasAnyPermission(['view-customer', 'all-customer'])) {
+            $token->delete();
+            return response()->json([
+                'success' => false,
+                'message' => 'The account no longer has permission to read customer records.',
             ], 403);
         }
 

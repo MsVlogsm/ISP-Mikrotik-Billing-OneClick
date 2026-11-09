@@ -18,14 +18,27 @@ class SmsBridgeController extends Controller
         $this->middleware('auth');
     }
 
+    /** Protect package routes which are registered outside the billing route group. */
+    private function authorizeGatewayManagement(): void
+    {
+        $user = request()->user();
+        abort_unless(
+            $user && ($user->hasRole('Super Admin') || $user->hasPermissionTo('site-setup')),
+            403,
+            'You do not have permission to manage SMS gateways.'
+        );
+    }
+
     public function index()
     {
+        $this->authorizeGatewayManagement();
         $gateways = $this->smsService->getGateways();
         return view('smsBridge::gateways.index', compact('gateways'));
     }
 
     public function store(Request $request)
     {
+        $this->authorizeGatewayManagement();
         $data = $request->validate([
             'name' => 'required|string|max:255',
             'api_url' => 'required|url',
@@ -60,6 +73,7 @@ class SmsBridgeController extends Controller
 
     public function toggle(Request $request, $id)
     {
+        $this->authorizeGatewayManagement();
         $data = $request->validate([
             'name' => 'required|string|max:255',
             'is_active' => 'boolean'
@@ -74,6 +88,7 @@ class SmsBridgeController extends Controller
 
     public function update(Request $request, $id)
     {
+        $this->authorizeGatewayManagement();
         $data = $request->validate([
             'name' => 'required|string|max:255',
             'api_url' => 'required|url',
@@ -99,6 +114,7 @@ class SmsBridgeController extends Controller
     public function balance($id)
 
     {
+        $this->authorizeGatewayManagement();
 
         $result = $this->smsService->checkBalance($id);
 
@@ -110,6 +126,7 @@ class SmsBridgeController extends Controller
 
     public function test(Request $request, $id)
     {
+        $this->authorizeGatewayManagement();
         $request->validate([
             'phone' => 'required|string',
             'message' => 'required|string',
@@ -126,6 +143,7 @@ class SmsBridgeController extends Controller
 
     public function destroy($id)
     {
+        $this->authorizeGatewayManagement();
         $this->smsService->deleteGateway($id);
         return redirect()->route('sms-bridge.index')->with('success', 'SMS Gateway deleted.');
     }

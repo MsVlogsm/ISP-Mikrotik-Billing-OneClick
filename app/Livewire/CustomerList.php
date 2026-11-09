@@ -3,6 +3,7 @@
 namespace App\Livewire;
 
 use App\Http\Controllers\MikrotikController;
+use App\Jobs\SyncCustomerOnuJob;
 use App\Models\BillingInfo;
 use App\Models\CustomersInfo;
 use App\Models\PaymentSummary;
@@ -11,6 +12,8 @@ use App\Models\Reseller;
 use App\Models\RouterList;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\RateLimiter;
 use Livewire\Attributes\On;
 use Livewire\Component;
 use Yajra\DataTables\Facades\DataTables;
@@ -71,6 +74,76 @@ class CustomerList extends Component
 
     public $bulkClientError = '';
 
+    /** Queue a single-customer ONU refresh and return immediately to the browser. */
+    #[On('sync-customer-onu')]
+    public function syncCustomerOnu($id): void
+    {
+        if (! hasAccess(['Super Admin'], ['network-inventory'])) {
+            flash()->addError('ONU sync করার permission নেই।');
+            return;
+        }
+
+        if (! is_string($id) || $id === '') {
+            flash()->addError('Customer identity পাওয়া যায়নি।');
+            return;
+        }
+
+        $rateKey = 'customer-onu-realtime-sync:user:'.auth()->id();
+        if (RateLimiter::tooManyAttempts($rateKey, 12)) {
+            flash()->addError('অনেকবার ONU sync করা হয়েছে। এক মিনিট পরে আবার চেষ্টা করুন।');
+            return;
+        }
+
+        $statusKey = null;
+        try {
+            $customerId = decrypt($id);
+            $customer = CustomersInfo::query()->where('customer_unique_id', $customerId)->firstOrFail();
+            $statusKey = 'customer-onu-realtime-sync:status:'.auth()->id().':'.$customer->id;
+            $existing = Cache::get($statusKey);
+            if (is_array($existing) && in_array($existing['state'] ?? '', ['pending', 'running'], true)) {
+                return;
+            }
+
+            RateLimiter::hit($rateKey, 60);
+            Cache::put($statusKey, ['state' => 'pending'], now()->addMinutes(10));
+            SyncCustomerOnuJob::dispatch((int) $customer->id, (int) auth()->id())->onQueue('default');
+        } catch (\Throwable $exception) {
+            Cache::forget($statusKey ?? '');
+            \Log::warning('Could not queue customer ONU sync', [
+                'user_id' => auth()->id(),
+                'error' => $exception->getMessage(),
+            ]);
+            flash()->addError('ONU sync queue-তে পাঠানো যায়নি: '.$exception->getMessage());
+        }
+    }
+
+    /** Poll only the current user's queued ONU refresh status. */
+    public function getCustomerOnuSyncStatus($id): array
+    {
+        if (! hasAccess(['Super Admin'], ['network-inventory']) || ! is_string($id) || $id === '') {
+            return ['state' => 'failed', 'message' => 'Unauthorized'];
+        }
+
+        try {
+            $customerId = decrypt($id);
+            $customer = CustomersInfo::query()->where('customer_unique_id', $customerId)->firstOrFail(['id']);
+            return Cache::get('customer-onu-realtime-sync:status:'.auth()->id().':'.$customer->id, ['state' => 'pending']);
+        } catch (\Throwable) {
+            return ['state' => 'failed', 'message' => 'Customer identity যাচাই করা যায়নি।'];
+        }
+    }
+
+    /** Force the next Customer List draw to refresh the cached live PPP session snapshot. */
+    public function refreshLiveOnlineStatus(): void
+    {
+        if (! hasAccess(['Super Admin'], ['view-customer', 'all-customer'])) {
+            abort(403, 'Unauthorized action.');
+        }
+
+        \Illuminate\Support\Facades\Cache::forget('customer-list:live-ppp-usernames-v2');
+        $this->dispatch('customer-online-sync-complete');
+    }
+
     public function render()
     {
         if (! hasAccess(['Super Admin'], ['view-customer', 'all-customer'])) {
@@ -100,7 +173,7 @@ class CustomerList extends Component
         $statusFilter = ['pending', 'disable', 'free', 'inactive'];
 
         $data = CustomersInfo::query()
-            ->with(['billing', 'pppUser', 'customerAddress', 'official', 'package', 'reseller'])
+            ->with(['billing', 'pppUser', 'customerAddress', 'official', 'package', 'reseller', 'latestOnuOpticalReading.onuMapping.olt'])
             ->select('customers_infos.*');
 
         // Global customer search: search across the customer's stored identity/contact
@@ -156,8 +229,10 @@ class CustomerList extends Component
                 $data->whereNotIn('status', $statusFilter)
                     ->whereDoesntHave('customerAddress', function ($q) {
                         $q->where('label_name', 'Network Location')
-                            ->whereNotNull('latitude')
-                            ->whereNotNull('longitude');
+                            ->whereNotNull('latitude')->where('latitude', '!=', '')
+                            ->whereNotNull('longitude')->where('longitude', '!=', '')
+                            ->whereBetween('latitude', [-90, 90])
+                            ->whereBetween('longitude', [-180, 180]);
                     });
                 break;
 
@@ -314,7 +389,7 @@ class CustomerList extends Component
                 $isOnline = $username !== '' && ! empty($livePppUsers[$router][mb_strtolower($username)]);
                 $dotClass = $isOnline ? 'customer-live-dot customer-live-dot--active' : 'customer-live-dot customer-live-dot--inactive';
                 $label = $isOnline ? 'Online now (live MikroTik PPP session)' : 'Offline (not found in live MikroTik PPP sessions)';
-                $liveText = '<small class="d-block '.($isOnline ? 'text-success' : 'text-muted').'">'.($isOnline ? 'Online' : 'Offline').'</small>';
+                $liveText = '<small class="customer-live-status '.($isOnline ? 'text-success' : 'text-muted').'">'.($isOnline ? 'Online' : 'Offline').'</small>';
                 return '<span class="customer-cid-live" title="'.e($label).'"><span class="'.e($dotClass).'" aria-label="'.e($label).'"></span>'
                     .'<a href="'.e($url).'" class="fw-bold text-primary text-decoration-none" title="Open Customer Details">'
                     .e($row->customer_unique_id)
@@ -349,14 +424,43 @@ class CustomerList extends Component
                 $dial = preg_replace('/[^0-9+]/', '', (string) $row->mobile);
                 return '<span class="d-inline-flex align-items-center gap-2 text-nowrap">'
                     .'<span>'.e($display).'</span>'
-                    .'<a class="btn btn-sm btn-outline-success py-1 px-2" href="tel:'.e($dial).'" aria-label="Call '.e($display).'" title="Call customer">'
-                    .'<i class="bi bi-telephone-fill" aria-hidden="true"></i> <span>Call</span></a></span>';
+                    .'<a class="btn btn-sm btn-outline-success py-1 px-2 customer-call-action" href="tel:'.e($dial).'" aria-label="Call '.e($display).'" title="Call customer">'
+                    .'<i class="bi bi-telephone-fill" aria-hidden="true"></i> <span class="customer-call-label">Call</span></a></span>';
             })
             ->addColumn('package_display', function ($row) {
-                $name = $row->package?->package ?: $row->package_name;
+                // package_name was removed from customers_infos when package_id became
+                // the canonical FK. Older imported customers can still have their real
+                // MikroTik package in PPPSecrets.profile until the FK is reconciled.
+                $name = $row->package?->package ?: $row->pppUser?->profile;
                 $price = $row->billing?->monthly_rent ?? $row->package?->price;
                 return '<div class="fw-semibold">'.e($name ?: 'N/A').'</div>'
                     .($price !== null ? '<small class="text-muted">'.number_format((float) $price, 2).' ৳</small>' : '');
+            })
+            ->addColumn('onu_rx_power_display', function ($row) {
+                $subscriberLink = $row->latestOnuOpticalReading;
+                $reading = $subscriberLink?->onuMapping;
+
+                if (! $reading || $reading->rx_power === null) {
+                    return '<span class="text-muted small" title="No RX measurement received in the last 30 minutes">No fresh OPM</span>';
+                }
+
+                $rxPower = (float) $reading->rx_power;
+                $signalClass = $rxPower >= -20
+                    ? 'bg-success-subtle text-success'
+                    : ($rxPower >= -27 ? 'bg-warning-subtle text-warning-emphasis' : 'bg-danger-subtle text-danger');
+
+                $details = array_filter([
+                    $reading->olt?->name,
+                    filled($reading->pon_port) ? 'PON '.$reading->pon_port : null,
+                    filled($reading->onu_id) ? 'ONU '.$reading->onu_id : null,
+                ]);
+                $sampledAt = $reading->opm_last_seen_at?->format('d M H:i:s');
+                $title = implode(' · ', array_filter(array_merge($details, $sampledAt ? ['Sampled '.$sampledAt] : [])));
+
+                return '<div class="d-inline-flex flex-column align-items-start gap-1" title="'.e($title).'">'
+                    .'<span class="badge rounded-pill '.$signalClass.' fw-bold">RX '.number_format($rxPower, 2).' dBm</span>'
+                    .'<small class="text-muted">'.e(implode(' · ', $details) ?: 'Mapped ONU').'</small>'
+                    .'</div>';
             })
             ->addColumn('billing_date_display', function ($row) {
                 if (! $row->billing?->auto_disable_date) {
@@ -417,8 +521,19 @@ class CustomerList extends Component
                 $canInvoice = $canAction(['payment-collection-invoice']);
                 $canSms = $canAction(['create-sms']);
                 $canGraph = $canAction(['network-inventory', 'mikrotik-setup']);
+                $canSyncOnu = $isAdmin || hasAccess(['Super Admin'], ['network-inventory']);
                 $canTicket = $canAction(['manage-tickets', 'view-tickets']);
                 $actionUrl = fn ($action) => route('customer.actions', ['id' => $id, 'action' => $action]);
+                $syncButton = '';
+                if ($canSyncOnu) {
+                    $hasPppoe = $row->pppUser && filled($row->pppUser->username) && filled($row->pppUser->router_name);
+                    $jsonCustomerId = json_encode($id, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
+                    $syncButton = '<button type="button" class="btn btn-sm btn-outline-success customer-sync-onu-btn" '
+                        .'title="'.($hasPppoe ? 'Realtime sync this customer ONU/OPM' : 'No PPPoE account linked').'" '
+                        .($hasPppoe ? '' : 'disabled aria-disabled="true" ')
+                        .'onclick=\'syncCustomerOnu('.$jsonCustomerId.', this)\'>'
+                        .'<i class="bi bi-arrow-repeat me-1"></i><span>Sync ONU</span></button>';
+                }
                 $menu = '<div class="dropdown customer-row-actions">'
                     .'<button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-lightning-charge me-1"></i>Actions</button>'
                     .'<ul class="dropdown-menu dropdown-menu-end shadow">';
@@ -482,9 +597,9 @@ class CustomerList extends Component
                 if ($isAdmin || hasAccess(['Super Admin'], ['delete-customer'])) {
                     $menu .= '<li><button class="dropdown-item text-danger" type="button" onclick="confirmDeleteCustomer(\''.$id.'\')"><i class="bi bi-trash me-2"></i>Delete customer</button></li>';
                 }
-                return $menu.'</ul></div>';
+                return '<div class="d-flex align-items-center justify-content-center gap-1 customer-row-action-group">'.$syncButton.$menu.'</ul></div></div>';
             })
-            ->rawColumns(['customer_identity', 'customers_address', 'billing_breakdown', 'connection_details', 'billing_summary', 'action', 'disable_details', 'cid', 'customer_name_display', 'connection', 'mobile_display', 'package_display', 'billing_date_display', 'balance_display', 'expiry_display', 'address_display', 'pop_area', 'monthly_bill_display'])
+            ->rawColumns(['customer_identity', 'customers_address', 'billing_breakdown', 'connection_details', 'billing_summary', 'action', 'disable_details', 'cid', 'customer_name_display', 'connection', 'mobile_display', 'package_display', 'onu_rx_power_display', 'billing_date_display', 'balance_display', 'expiry_display', 'address_display', 'pop_area', 'monthly_bill_display'])
             ->make(true);
     }
 

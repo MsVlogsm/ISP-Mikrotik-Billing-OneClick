@@ -682,7 +682,11 @@
                                         <span class="badge bg-danger p-2"><i class="bi bi-cash-stack fs-5"></i></span>
                                         <div>
                                             <h5 class="mb-0 fw-bold">{{ __('bKash Merchant Checkout API') }}</h5>
-                                            <p class="text-muted small mb-0">{{ __('Manage bKash tokenized gateway integration credentials.') }}</p>
+                                            <p class="text-muted small mb-0">{{ __('Manage bKash tokenized gateway integration credentials.') }}
+                                                <span class="badge {{ ($data['payment_bkash_credentials_ready'] ?? false) ? 'bg-success' : 'bg-warning text-dark' }}">
+                                                    {{ ($data['payment_bkash_credentials_ready'] ?? false) ? __('Credentials stored') : __('Credentials incomplete') }}
+                                                </span>
+                                            </p>
                                         </div>
                                     </div>
                                     <div class="form-check form-switch fs-4">
@@ -704,19 +708,19 @@
                                     </div>
                                     <div class="col-md-6">
                                         <label class="form-label fw-semibold">{{ __('bKash Merchant Username') }}</label>
-                                        <input type="text" class="form-control rounded-3" wire:model="data.payment_bkash_username">
+                                        <input type="text" class="form-control rounded-3" wire:model="data.payment_bkash_username" placeholder="{{ __('Leave blank to keep saved credential') }}">
                                     </div>
                                     <div class="col-md-6">
                                         <label class="form-label fw-semibold">{{ __('bKash Merchant Password') }}</label>
-                                        <input type="password" class="form-control rounded-3" wire:model="data.payment_bkash_password">
+                                        <input type="password" class="form-control rounded-3" wire:model="data.payment_bkash_password" autocomplete="new-password" placeholder="{{ __('Leave blank to keep saved credential') }}">
                                     </div>
                                     <div class="col-md-6">
                                         <label class="form-label fw-semibold">{{ __('bKash Application Key') }}</label>
-                                        <input type="password" class="form-control rounded-3" wire:model="data.payment_bkash_app_key">
+                                        <input type="password" class="form-control rounded-3" wire:model="data.payment_bkash_app_key" autocomplete="new-password" placeholder="{{ __('Leave blank to keep saved credential') }}">
                                     </div>
                                     <div class="col-md-6">
                                         <label class="form-label fw-semibold">{{ __('bKash Application Secret') }}</label>
-                                        <input type="password" class="form-control rounded-3" wire:model="data.payment_bkash_app_secret">
+                                        <input type="password" class="form-control rounded-3" wire:model="data.payment_bkash_app_secret" autocomplete="new-password" placeholder="{{ __('Leave blank to keep saved credential') }}">
                                     </div>
                                 </div>
                             </div>
@@ -728,7 +732,11 @@
                                         <span class="badge bg-warning p-2"><i class="bi bi-wallet2 fs-5"></i></span>
                                         <div>
                                             <h5 class="mb-0 fw-bold">{{ __('Nagad Merchant Checkout API') }}</h5>
-                                            <p class="text-muted small mb-0">{{ __('Manage Nagad DFS system checkout credentials.') }}</p>
+                                            <p class="text-muted small mb-0">{{ __('Manage Nagad DFS system checkout credentials.') }}
+                                                <span class="badge {{ ($data['payment_nagad_credentials_ready'] ?? false) ? 'bg-success' : 'bg-warning text-dark' }}">
+                                                    {{ ($data['payment_nagad_credentials_ready'] ?? false) ? __('Credentials stored') : __('Credentials incomplete') }}
+                                                </span>
+                                            </p>
                                         </div>
                                     </div>
                                     <div class="form-check form-switch fs-4">
@@ -743,15 +751,15 @@
                                     </div>
                                     <div class="col-md-4">
                                         <label class="form-label fw-semibold">{{ __('Nagad Merchant ID') }}</label>
-                                        <input type="text" class="form-control rounded-3" wire:model="data.payment_nagad_merchant_id">
+                                        <input type="text" class="form-control rounded-3" wire:model="data.payment_nagad_merchant_id" placeholder="{{ __('Leave blank to keep saved credential') }}">
                                     </div>
                                     <div class="col-md-6">
                                         <label class="form-label fw-semibold">{{ __('Nagad Server Public Key') }}</label>
-                                        <textarea class="form-control rounded-3 font-monospace" rows="4" style="font-size:0.75rem;" wire:model="data.payment_nagad_public_key"></textarea>
+                                        <textarea class="form-control rounded-3 font-monospace" rows="4" style="font-size:0.75rem;" wire:model="data.payment_nagad_public_key" placeholder="{{ __('Paste a new provider public key, or leave blank to keep the saved key') }}"></textarea>
                                     </div>
                                     <div class="col-md-6">
                                         <label class="form-label fw-semibold">{{ __('Merchant Private Key') }}</label>
-                                        <textarea class="form-control rounded-3 font-monospace" rows="4" style="font-size:0.75rem;" wire:model="data.payment_nagad_private_key"></textarea>
+                                        <textarea class="form-control rounded-3 font-monospace" rows="4" style="font-size:0.75rem;" wire:model="data.payment_nagad_private_key" placeholder="{{ __('Paste a new merchant private key, or leave blank to keep the saved key') }}"></textarea>
                                     </div>
                                 </div>
                             </div>
@@ -763,7 +771,11 @@
                                         <span class="badge bg-primary p-2"><i class="bi bi-credit-card fs-5"></i></span>
                                         <div>
                                             <h5 class="mb-0 fw-bold">{{ __('SSLCommerz Multi-Channel Payment Gateway') }}</h5>
-                                            <p class="text-muted small mb-0">{{ __('Accept all debit/credit cards and MFS wallets inside Bangladesh.') }}</p>
+                                            <p class="text-muted small mb-0">{{ __('Accept all debit/credit cards and MFS wallets inside Bangladesh.') }}
+                                                <span class="badge {{ ($data['payment_sslcommerz_credentials_ready'] ?? false) ? 'bg-success' : 'bg-warning text-dark' }}">
+                                                    {{ ($data['payment_sslcommerz_credentials_ready'] ?? false) ? __('Credentials stored') : __('Credentials incomplete') }}
+                                                </span>
+                                            </p>
                                         </div>
                                     </div>
                                     <div class="form-check form-switch fs-4">
@@ -774,11 +786,11 @@
                                 <div class="row g-3" x-show="$wire.data.payment_sslcommerz_enabled">
                                     <div class="col-md-5">
                                         <label class="form-label fw-semibold">{{ __('Store ID') }}</label>
-                                        <input type="text" class="form-control rounded-3" wire:model="data.payment_sslcommerz_store_id">
+                                        <input type="text" class="form-control rounded-3" wire:model="data.payment_sslcommerz_store_id" placeholder="{{ __('Leave blank to keep saved credential') }}">
                                     </div>
                                     <div class="col-md-5">
                                         <label class="form-label fw-semibold">{{ __('Store Password') }}</label>
-                                        <input type="password" class="form-control rounded-3" wire:model="data.payment_sslcommerz_store_password">
+                                        <input type="password" class="form-control rounded-3" wire:model="data.payment_sslcommerz_store_password" autocomplete="new-password" placeholder="{{ __('Leave blank to keep saved credential') }}">
                                     </div>
                                     <div class="col-md-2">
                                         <div class="form-check form-switch ps-0 d-flex justify-content-between align-items-center p-2 border rounded-3 bg-light bg-opacity-50 mt-4">
@@ -801,11 +813,11 @@
                             <div class="row g-3">
                                 <div class="col-md-6">
                                     <label class="form-label fw-semibold">{{ __('API Secret Key') }}</label>
-                                    <input type="password" class="form-control rounded-3" wire:model="data.site_secret_key">
+                                    <input type="password" class="form-control rounded-3" wire:model="data.site_secret_key" autocomplete="new-password" placeholder="{{ __('Leave blank to keep saved secret') }}">
                                 </div>
                                 <div class="col-md-6">
                                     <label class="form-label fw-semibold">{{ __('API Secret Value') }}</label>
-                                    <input type="password" class="form-control rounded-3" wire:model="data.site_secret_value">
+                                    <input type="password" class="form-control rounded-3" wire:model="data.site_secret_value" autocomplete="new-password" placeholder="{{ __('Leave blank to keep saved secret') }}">
                                 </div>
                                 <div class="col-md-4">
                                     <label class="form-label fw-semibold">{{ __('Validity Threshold') }}</label>

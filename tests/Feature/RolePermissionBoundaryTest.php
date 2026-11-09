@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Livewire\Admin\ManageRole;
+use App\Livewire\Admin\ManageUser;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -97,6 +98,32 @@ class RolePermissionBoundaryTest extends TestCase
         $manager = User::factory()->create(['email_verified_at' => now()]);
         $manager->assignRole(Role::findByName('Manager', 'web'));
         $this->actingAs($manager)->get('/admin-users')->assertForbidden();
+    }
+
+    public function test_admin_user_assignment_cannot_grant_a_role_with_permissions_beyond_the_actor(): void
+    {
+        $admin = User::factory()->create(['email_verified_at' => now()]);
+        $admin->assignRole(Role::findByName('Admin', 'web'));
+
+        $networkPermission = Permission::firstOrCreate(['name' => 'mikrotik-setup', 'guard_name' => 'web']);
+        $networkRole = Role::firstOrCreate(['name' => 'Network Operator', 'guard_name' => 'web']);
+        $networkRole->syncPermissions([$networkPermission]);
+
+        $this->actingAs($admin);
+        $component = Livewire::test(ManageUser::class)->call('newUser');
+        $assignableRoles = $component->get('userRoles');
+        $this->assertContains('Manager', $assignableRoles);
+        $this->assertNotContains('Network Operator', $assignableRoles);
+
+        $component->set('name', 'Restricted Role Attempt')
+            ->set('email', 'restricted-role@example.com')
+            ->set('mobile', '01712345678')
+            ->set('password', 'password123')
+            ->set('password_confirmation', 'password123')
+            ->set('roles', ['Network Operator'])
+            ->call('submitUser');
+
+        $this->assertDatabaseMissing('users', ['email' => 'restricted-role@example.com']);
     }
 
     public function test_super_admin_can_open_role_editor_and_matrix_is_defined(): void

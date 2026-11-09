@@ -33,8 +33,11 @@ class ApiV1AuthController extends Controller
             ], 401);
         }
 
-        // Do not give resellers a token that can read the whole customer list.
-        if (! $user->hasAnyRole(['Super Admin', 'Admin', 'Manager'])) {
+        // API access must not bypass the same customer-data boundary used by the web UI.
+        // Super Admin remains the explicit platform-wide exception.
+        $canReadCustomers = $user->hasRole('Super Admin')
+            || $user->hasAnyPermission(['view-customer', 'all-customer']);
+        if (! $user->hasAnyRole(['Super Admin', 'Admin', 'Manager']) || ! $canReadCustomers) {
             return response()->json([
                 'success' => false,
                 'message' => 'This account is not permitted to use the staff Android API.',

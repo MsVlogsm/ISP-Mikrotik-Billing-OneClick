@@ -6,6 +6,7 @@ use Filament\Models\Contracts\FilamentUser;
 use Filament\Models\Contracts\HasAvatar;
 use Filament\Panel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 
 class PPPSecrets extends Authenticatable implements FilamentUser, HasAvatar
@@ -21,6 +22,10 @@ class PPPSecrets extends Authenticatable implements FilamentUser, HasAvatar
         'caller_id',
         'comment',
         'ppp_remote_ip',
+        'ip_address',
+        'interface',
+        'subnet_prefix',
+        'gateway',
         'bandwidth',
         'uptime',
         'downtime',
@@ -37,6 +42,19 @@ class PPPSecrets extends Authenticatable implements FilamentUser, HasAvatar
         'password',
         'remember_token',
     ];
+
+    /** ONU mappings served by this PPP account, including shared-ONU assignments. */
+    public function oltOnuMappings(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            OltOnuCustomerMapping::class,
+            'olt_onu_customer_ppp_links',
+            'ppp_user_id',
+            'olt_onu_customer_mapping_id'
+        )->withPivot([
+            'customer_id', 'client_mac', 'source', 'status', 'first_seen_at', 'last_seen_at', 'notes',
+        ])->withTimestamps();
+    }
 
     public function customer()
     {
@@ -147,4 +165,3 @@ class PPPSecrets extends Authenticatable implements FilamentUser, HasAvatar
         return null;
     }
 }
-

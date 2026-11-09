@@ -136,6 +136,12 @@ class OnuMacLedgerService
         }
 
         $record = $matches->first();
+        // Historical identity records can deliberately be retained for traceability
+        // after a mismatch. Such rows are evidence for review, not mapping authority.
+        if ($this->ledgerRequiresManualReview($record)) {
+            return null;
+        }
+
         if ($mac !== '' && $serial !== '' && $this->normalizeMac($record->current_mac) === $mac
             && $this->normalizeSerial($record->serial_no) !== ''
             && $this->normalizeSerial($record->serial_no) !== $serial) {
@@ -204,6 +210,17 @@ class OnuMacLedgerService
 
         return str_contains($notes, 'manual review required')
             || str_contains($notes, 'stable onu identity changed');
+    }
+
+    private function ledgerRequiresManualReview(OnuMacLedger $record): bool
+    {
+        $notes = strtolower(trim((string) $record->notes));
+
+        return str_contains($notes, 'manual review required')
+            || str_contains($notes, 'requires operator review')
+            || str_contains($notes, 'customer/pppoe link cleared')
+            || str_contains($notes, 'does not match pppoe last_caller_id')
+            || str_contains($notes, 'duplicate live mac');
     }
 
     private function hasIdentityRecord(Collection $records, OltOnuCustomerMapping $mapping): bool

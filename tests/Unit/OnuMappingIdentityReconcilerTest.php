@@ -41,12 +41,20 @@ class OnuMappingIdentityReconcilerTest extends TestCase
         $this->assertCount(1, $plan['new']);
     }
 
-    public function test_rejects_duplicate_live_mac_or_onu_id(): void
+    public function test_duplicate_live_mac_is_reported_as_ambiguous_and_duplicate_pon_onu_id_is_rejected(): void
     {
+        $plan = (new OnuMappingIdentityReconciler())->plan([
+            ['onu_id' => '1', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:55', 'status' => 'online'],
+            ['onu_id' => '2', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:55', 'status' => 'online'],
+        ], []);
+        $this->assertCount(2, $plan['ambiguous_new']);
+        $this->assertSame([], $plan['new']);
+        $this->assertSame([], $plan['matched']);
+
         $this->expectException(InvalidArgumentException::class);
         (new OnuMappingIdentityReconciler())->plan([
             ['onu_id' => '1', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:55', 'status' => 'online'],
-            ['onu_id' => '2', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:55', 'status' => 'online'],
+            ['onu_id' => '1', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:66', 'status' => 'online'],
         ], []);
     }
 

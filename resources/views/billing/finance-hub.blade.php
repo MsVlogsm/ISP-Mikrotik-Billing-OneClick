@@ -99,6 +99,7 @@
                 <div class="d-flex flex-wrap gap-2 mt-4">
                     <a href="{{ route('payment-collection') }}" class="btn btn-finance-light"><i class="bi bi-cash-coin me-2"></i>Open Collection Desk</a>
                     <a href="{{ route('income-summary') }}" class="btn btn-finance-glass"><i class="bi bi-graph-up-arrow me-2"></i>Income Report</a>
+                    <a href="{{ route('billing-finance.advance-payments') }}" class="btn btn-finance-glass"><i class="bi bi-wallet2 me-2"></i>Advance Payments</a>
                 </div>
             </div>
         </section>
@@ -141,6 +142,29 @@
                 <div class="finance-stat-top"><span class="finance-stat-label">Year-to-date Revenue</span><span class="finance-stat-icon finance-icon-blue"><i class="bi bi-calendar2-range"></i></span></div>
                 <div class="finance-stat-value">{{ $formatMoney($yearRevenue) }}</div>
                 <div class="finance-stat-note">Recorded collections and hotspot sales</div>
+            </div></div>
+        </div>
+
+        <div class="row g-3 mt-1 mb-3">
+            <div class="col-6 col-xl-3"><div class="finance-stat">
+                <div class="finance-stat-top"><span class="finance-stat-label">Customer Advance Balance</span><span class="finance-stat-icon finance-icon-violet"><i class="bi bi-wallet2"></i></span></div>
+                <div class="finance-stat-value">{{ $formatMoney($advanceBalanceTotal) }}</div>
+                <div class="finance-stat-note">{{ number_format($advanceWalletCustomers) }} customers with available credit</div>
+            </div></div>
+            <div class="col-6 col-xl-3"><div class="finance-stat">
+                <div class="finance-stat-top"><span class="finance-stat-label">Advance Deposits · Month</span><span class="finance-stat-icon finance-icon-teal"><i class="bi bi-plus-circle"></i></span></div>
+                <div class="finance-stat-value">{{ $formatMoney($advanceDepositsMonth) }}</div>
+                <div class="finance-stat-note">Cash received into customer wallets</div>
+            </div></div>
+            <div class="col-6 col-xl-3"><div class="finance-stat">
+                <div class="finance-stat-top"><span class="finance-stat-label">Advance Utilized · Month</span><span class="finance-stat-icon finance-icon-blue"><i class="bi bi-arrow-down-circle"></i></span></div>
+                <div class="finance-stat-value">{{ $formatMoney($advanceUtilizedMonth) }}</div>
+                <div class="finance-stat-note">Credit applied to monthly bills</div>
+            </div></div>
+            <div class="col-6 col-xl-3"><div class="finance-stat">
+                <div class="finance-stat-top"><span class="finance-stat-label">Advance Wallet</span><span class="finance-stat-icon finance-icon-amber"><i class="bi bi-journal-text"></i></span></div>
+                <div class="finance-stat-value"><a class="finance-link" href="{{ route('billing-finance.advance-payments') }}">Manage Ledger <i class="bi bi-arrow-up-right"></i></a></div>
+                <div class="finance-stat-note">Deposit, allocate and audit customer credit</div>
             </div></div>
         </div>
 

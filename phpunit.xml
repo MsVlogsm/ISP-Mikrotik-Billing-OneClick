@@ -19,6 +19,7 @@
     </source>
     <php>
         <env name="APP_ENV" value="testing"/>
+        <env name="APP_KEY" value="base64:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXowMTIzNDU="/>
         <env name="APP_URL" value="http://bill.xlinkbd.net:8081"/>
         <env name="SESSION_DOMAIN" value=".localhost"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>

@@ -2,9 +2,9 @@ name: Tests
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'upgrade/laravel-13']
   push:
-    branches: [main]
+    branches: [main, 'upgrade/laravel-13']
 
 jobs:
   test:
@@ -17,7 +17,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@d52fc211a0436f8839a587b3b5b8efddab4744ea
         with:
-          php-version: '8.3'
+          php-version: '8.5'
           extensions: mbstring, pdo_sqlite, sqlite3, bcmath, intl, gd, zip
           coverage: none
           tools: composer:v2
