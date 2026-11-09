@@ -117,10 +117,14 @@ For local development or a manually managed environment:
 
 ## Background processing and scheduled tasks
 
-The OneClick installer creates and enables dedicated systemd services for the Laravel queue worker and scheduler. Check them with:
+The OneClick installer creates and enables dedicated systemd services for the Laravel queue worker, scheduler, and daily backup timer. It also configures a dedicated PHP-FPM pool under the selected application user, daily log rotation, and a root-only local backup of the database, `.env`, and `storage/app` with 14-day retention. Check them with:
 
     systemctl status isp-billing-worker.service
     systemctl status isp-billing-scheduler.service
+    systemctl status isp-billing-backup.timer
+    systemctl start isp-billing-backup.service
+
+Backups are stored under `/var/backups/isp-billing` with root-only permissions. They remain on the same server, so configure an off-site copy for disaster recovery. Laravel logs are rotated daily and retained for 14 rotations. The installer does not enable UFW or alter existing firewall rules; allow the selected billing and portal TCP ports using your approved firewall policy.
 
 For manually managed installations that do not use the OneClick systemd services, configure a single cron entry to run the Laravel scheduler:
 

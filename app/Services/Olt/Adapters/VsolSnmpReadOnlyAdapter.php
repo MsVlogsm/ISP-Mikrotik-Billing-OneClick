@@ -101,6 +101,7 @@ class VsolSnmpReadOnlyAdapter implements OltReadOnlyAdapter
                 'version' => strtoupper((string) ($config['version'] ?? $device->snmp_version ?? '2C')),
             ],
             'onus' => [],
+            'interfaces' => [],
             'meta' => [
                 'read_only' => true,
                 'writes_performed' => false,
@@ -138,10 +139,33 @@ class VsolSnmpReadOnlyAdapter implements OltReadOnlyAdapter
             $result['device'][$name] = $this->cleanSnmpValue($value);
         }
 
+        // Hardware metrics are optional: unsupported OIDs stay null and do not
+        // fail otherwise healthy inventory polling.
+        $hardwareOids = array_merge((array) ($profile['hardware_oids'] ?? []), (array) ($config['hardware_oids'] ?? []));
+        $hardwareAvailability = [];
+        foreach (['cpu_percent', 'memory_percent', 'chassis_temp_c'] as $metric) {
+            $oid = $hardwareOids[$metric] ?? null;
+            $raw = is_string($oid) && $this->validOid($oid)
+                ? @snmp2_get($host, $community, trim($oid), $timeout, $retries)
+                : false;
+            $value = $raw === false ? null : $this->normalizeMetric($this->cleanSnmpValue($raw));
+            if (in_array($metric, ['cpu_percent', 'memory_percent'], true) && ($value === null || $value < 0 || $value > 100)) $value = null;
+            if ($metric === 'chassis_temp_c' && ($value === null || $value < -20 || $value > 150)) $value = null;
+            $result['device'][$metric] = $value;
+            $hardwareAvailability[$metric] = $value !== null;
+        }
+        $result['meta']['hardware_metric_availability'] = $hardwareAvailability;
+
+        $result['interfaces'] = $this->discoverInterfaces($host, $community, $timeout, $retries);
+        $result['meta']['interface_count'] = count($result['interfaces']);
+        $result['meta']['pon_interface_count'] = count(array_filter($result['interfaces'], static fn ($i) => ($i['role'] ?? '') === 'pon'));
+        $result['meta']['uplink_interface_count'] = count(array_filter($result['interfaces'], static fn ($i) => str_starts_with((string) ($i['role'] ?? ''), 'uplink_')));
+
         if ($onuConfig) {
             $result['onus'] = $this->discoverOnus($host, $community, $onuConfig, $timeout, $retries);
             if ($opmOids && $result['onus']) {
                 $result['onus'] = $this->enrichOpticalPower($host, $community, $result['onus'], $opmOids, $timeout, $retries);
+                $result['onus'] = $this->enrichDistance($host, $community, $result['onus'], $opmOids['distance_m'] ?? null, $timeout, $retries);
             }
 
             $clientMacDiscovery = ($profile['client_mac_discovery'] ?? true)
@@ -266,6 +290,81 @@ class VsolSnmpReadOnlyAdapter implements OltReadOnlyAdapter
         }
 
         return null;
+    }
+
+    /** Read-only IF-MIB inventory; roles come from the live ifDescr string, not assumed ifIndex ranges. */
+    private function discoverInterfaces(string $host, string $community, int $timeout, int $retries): array
+    {
+        $bases = [
+            'description' => '1.3.6.1.2.1.2.2.1.2',
+            'oper_status' => '1.3.6.1.2.1.2.2.1.8',
+            'in_octets' => '1.3.6.1.2.1.2.2.1.10',
+            'out_octets' => '1.3.6.1.2.1.2.2.1.16',
+            'in_octets_hc' => '1.3.6.1.2.1.31.1.1.1.6',
+            'out_octets_hc' => '1.3.6.1.2.1.31.1.1.1.10',
+            'in_errors' => '1.3.6.1.2.1.2.2.1.14',
+            'out_errors' => '1.3.6.1.2.1.2.2.1.20',
+            'in_discards' => '1.3.6.1.2.1.2.2.1.13',
+            'out_discards' => '1.3.6.1.2.1.2.2.1.19',
+            'in_ucast' => '1.3.6.1.2.1.2.2.1.11',
+            'in_nucast' => '1.3.6.1.2.1.2.2.1.12',
+            'out_ucast' => '1.3.6.1.2.1.2.2.1.17',
+            'out_nucast' => '1.3.6.1.2.1.2.2.1.18',
+        ];
+        $rows = [];
+        foreach ($bases as $field => $oid) {
+            foreach ($this->walkWithRetry($host, $community, $oid, $timeout, $retries) as $returned => $value) {
+                $index = $this->oidIndex((string) $returned, $oid);
+                if ($index === null || !ctype_digit($index)) continue;
+                $rows[$index][$field] = $this->cleanSnmpValue($value);
+            }
+        }
+        foreach ($rows as $index => &$row) {
+            $description = trim((string) ($row['description'] ?? ''));
+            if (preg_match('/^EPON\d+\/\d+$/i', $description)) $role = 'pon';
+            elseif (preg_match('/^EPON\d+\/\d+:\d+$/i', $description)) $role = 'onu';
+            elseif (preg_match('/^(GE|GIGABITETHERNET)\d+\/\d+$/i', $description)) $role = 'uplink_ge';
+            elseif (preg_match('/^(XGE|10GE|SFP\+?)\d*\/\d+$/i', $description)) $role = 'uplink_sfp';
+            else $role = 'other';
+            $row['if_index'] = (int) $index;
+            $row['description'] = $description;
+            $row['role'] = $role;
+            $state = trim((string) ($row['oper_status'] ?? ''));
+            $row['oper_status'] = preg_match('/\b1\b/', $state) ? 'up' : (preg_match('/\b2\b/', $state) ? 'down' : 'unknown');
+            $row['in_octets'] = $this->normalizeCounter($row['in_octets_hc'] ?? $row['in_octets'] ?? null);
+            $row['out_octets'] = $this->normalizeCounter($row['out_octets_hc'] ?? $row['out_octets'] ?? null);
+            foreach (['in_errors','out_errors','in_discards','out_discards'] as $counter) $row[$counter] = $this->normalizeCounter($row[$counter] ?? null);
+            $inUcast = $this->normalizeCounter($row['in_ucast'] ?? null); $inNUcast = $this->normalizeCounter($row['in_nucast'] ?? null);
+            $outUcast = $this->normalizeCounter($row['out_ucast'] ?? null); $outNUcast = $this->normalizeCounter($row['out_nucast'] ?? null);
+            $row['in_packets'] = ($inUcast !== null || $inNUcast !== null) ? ($inUcast ?? 0) + ($inNUcast ?? 0) : null;
+            $row['out_packets'] = ($outUcast !== null || $outNUcast !== null) ? ($outUcast ?? 0) + ($outNUcast ?? 0) : null;
+            unset($row['in_octets_hc'],$row['out_octets_hc'],$row['in_ucast'],$row['in_nucast'],$row['out_ucast'],$row['out_nucast']);
+        }
+        unset($row);
+        ksort($rows, SORT_NUMERIC);
+        return array_values($rows);
+    }
+
+    /** The V1.0.2R distance table is indexed by PON.ONU-ID, unlike authInfo's row suffix. */
+    private function enrichDistance(string $host, string $community, array $onus, mixed $distanceOid, int $timeout, int $retries): array
+    {
+        if (!is_string($distanceOid) || !$this->validOid($distanceOid)) return $onus;
+        $walkValues = [];
+        foreach ($this->walkWithRetry($host, $community, $distanceOid, $timeout, $retries) as $returned => $value) {
+            $index = $this->oidIndex((string) $returned, $distanceOid);
+            if ($index !== null && preg_match('/^\d+\.\d+$/', $index)) $walkValues[$index] = $this->normalizeMetric($this->cleanSnmpValue($value));
+        }
+        foreach ($onus as &$onu) {
+            $index = $this->opmIndexForOnu($onu);
+            $distance = $index !== null ? ($walkValues[$index] ?? null) : null;
+            if ($distance === null && $index !== null) {
+                $raw = @snmp2_get($host, $community, rtrim($distanceOid, '.').'.'.$index, max(250000, min(1000000, $timeout)), max(0, min(1, $retries)));
+                if ($raw !== false) $distance = $this->normalizeMetric($this->cleanSnmpValue($raw));
+            }
+            $onu['distance_m'] = $distance;
+        }
+        unset($onu);
+        return $onus;
     }
 
     private function discoverOnus(string $host, string $community, array $onuConfig, int $timeout, int $retries): array
@@ -620,6 +719,14 @@ class VsolSnmpReadOnlyAdapter implements OltReadOnlyAdapter
         }
 
         return is_numeric($value) ? (float) $value : null;
+    }
+
+    private function normalizeCounter(mixed $value): ?int
+    {
+        if ($value === null || $value === '') return null;
+        if (is_int($value)) return $value >= 0 ? $value : null;
+        if (preg_match('/\d+/', (string) $value, $matches)) return (int) $matches[0];
+        return null;
     }
 
     private function normalizeMetric(mixed $value): ?float

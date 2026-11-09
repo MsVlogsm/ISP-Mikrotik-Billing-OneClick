@@ -141,6 +141,13 @@ Schedule::call(fn () => $runCommand(
 ))->everyMinute()->timezone($timezone)->name('onu-mapping-sync')->withoutOverlapping()->onOneServer();
 
 Schedule::call(fn () => $runCommand(
+    'olt-live-metrics-sync',
+    'OLT Live Metrics / IF-MIB / Hardware Telemetry',
+    'Every 5 minutes',
+    'olt:poll-live-metrics'
+))->everyFiveMinutes()->timezone($timezone)->name('olt-live-metrics-sync')->withoutOverlapping();
+
+Schedule::call(fn () => $runCommand(
     'customer-connection-snapshots',
     'Customer Online / Offline Snapshots',
     'Every 5 minutes',
@@ -164,6 +171,13 @@ Schedule::call(fn () => $track(
         return ['message' => 'Heartbeat queued. Worker execution is verified separately.'];
     }
 ))->everyFiveMinutes()->timezone($timezone)->name('queue-heartbeat-dispatch')->withoutOverlapping();
+
+Schedule::call(fn () => $track(
+    'ipilot-zabbix-sync',
+    'iPilot Zabbix Monitoring Sync',
+    'Every 5 minutes',
+    fn () => app(\App\Services\ZabbixMonitoringService::class)->syncAll()
+))->everyFiveMinutes()->timezone($timezone)->name('ipilot-zabbix-sync')->withoutOverlapping()->onOneServer();
 
 Schedule::call(fn () => $track(
     'data-integrity-audit',

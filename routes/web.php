@@ -48,6 +48,7 @@ use App\Livewire\DeviceManager;
 use App\Livewire\NetworkEvents;
 use App\Livewire\NetworkTopology;
 use App\Livewire\OpticalAudit;
+use App\Http\Controllers\PublicNetworkMapController;
 use App\Livewire\HighUsageMonitor;
 use App\Livewire\DeviceWatcher;
 use App\Livewire\MikrotikLoginMessages;
@@ -134,6 +135,9 @@ Route::domain($baseDomain)->group(function () {
 
         return redirect()->to('http://'.$host.':8081/');
     });
+    Route::get('/network-map/shared/{token}', [PublicNetworkMapController::class, 'show'])
+        ->where('token', '[A-Za-z0-9]+')
+        ->name('network-map.public');
 });
 
 Route::middleware([
@@ -170,10 +174,43 @@ Route::middleware([
         Route::post('/due-call-reminders/test-connection', [\App\Http\Controllers\DueCallReminderController::class, 'testConnection'])->name('due-call-reminders.test-connection');
         Route::post('/due-call-reminders/test-call', [\App\Http\Controllers\DueCallReminderController::class, 'testCall'])->name('due-call-reminders.test-call');
 
+        // iPilot workspace — native X-Link pages for the supplied iPilot reference bundle.
+        Route::get('/ipilot', [\App\Http\Controllers\IpilotWorkspaceController::class, 'dashboard'])->name('ipilot');
+        Route::get('/ipilot/app-settings', [\App\Http\Controllers\IpilotApplicationSettingsController::class, 'index'])->name('ipilot.app-settings');
+        Route::post('/ipilot/app-settings', [\App\Http\Controllers\IpilotApplicationSettingsController::class, 'update'])->name('ipilot.app-settings.update');
+        Route::get('/ipilot/gis/outside-plant', [\App\Http\Controllers\IpilotGisWorkspaceController::class, 'outsidePlant'])->name('ipilot.gis.outside-plant');
+        Route::get('/ipilot/gis/operations', [\App\Http\Controllers\IpilotGisWorkspaceController::class, 'operations'])->name('ipilot.gis.operations');
+        Route::get('/ipilot/gis/planning', [\App\Http\Controllers\IpilotGisWorkspaceController::class, 'planning'])->name('ipilot.gis.planning');
+        Route::get('/ipilot/reports', [\App\Http\Controllers\IpilotWorkspaceController::class, 'reports'])->name('ipilot.reports');
+        Route::get('/ipilot/btrc', [\App\Http\Controllers\IpilotWorkspaceController::class, 'btrc'])->name('ipilot.btrc');
+        Route::get('/ipilot/btrc/export', [\App\Http\Controllers\IpilotWorkspaceController::class, 'exportBtrc'])->name('ipilot.btrc.export');
+        Route::get('/ipilot/terminal', [\App\Http\Controllers\IpilotWorkspaceController::class, 'terminal'])->name('ipilot.terminal');
+        Route::post('/ipilot/terminal/chat', [\App\Http\Controllers\IpilotWorkspaceController::class, 'terminalChat'])->middleware('throttle:20,1')->name('ipilot.terminal.chat');
+
+        Route::get('/ipilot/integrations', [\App\Http\Controllers\IntegrationCenterController::class, 'index'])->name('ipilot.integrations');
+        Route::post('/ipilot/integrations/clients', [\App\Http\Controllers\IntegrationCenterController::class, 'storeClient'])->name('ipilot.integrations.clients.store');
+        Route::put('/ipilot/integrations/clients/{client}', [\App\Http\Controllers\IntegrationCenterController::class, 'updateClient'])->name('ipilot.integrations.clients.update');
+        Route::delete('/ipilot/integrations/clients/{client}', [\App\Http\Controllers\IntegrationCenterController::class, 'deleteClient'])->name('ipilot.integrations.clients.delete');
+        Route::post('/ipilot/integrations/webhooks', [\App\Http\Controllers\IntegrationCenterController::class, 'storeWebhook'])->name('ipilot.integrations.webhooks.store');
+        Route::post('/ipilot/integrations/webhooks/{endpoint}/test', [\App\Http\Controllers\IntegrationCenterController::class, 'testWebhook'])->name('ipilot.integrations.webhooks.test');
+        Route::patch('/ipilot/integrations/webhooks/{endpoint}/toggle', [\App\Http\Controllers\IntegrationCenterController::class, 'toggleWebhook'])->name('ipilot.integrations.webhooks.toggle');
+        Route::delete('/ipilot/integrations/webhooks/{endpoint}', [\App\Http\Controllers\IntegrationCenterController::class, 'deleteWebhook'])->name('ipilot.integrations.webhooks.delete');
+        Route::get('/ipilot/api-v2-docs', [\App\Http\Controllers\IntegrationCenterController::class, 'documentation'])->name('ipilot.api-docs');
+
+        Route::get('/ipilot/zabbix', [\App\Http\Controllers\ZabbixServerController::class, 'index'])->name('ipilot.zabbix');
+        Route::post('/ipilot/zabbix', [\App\Http\Controllers\ZabbixServerController::class, 'store'])->name('ipilot.zabbix.store');
+        Route::post('/ipilot/zabbix/{server}/test', [\App\Http\Controllers\ZabbixServerController::class, 'test'])->name('ipilot.zabbix.test');
+        Route::get('/ipilot/zabbix/{server}/hosts', [\App\Http\Controllers\ZabbixServerController::class, 'hosts'])->name('ipilot.zabbix.hosts');
+        Route::get('/ipilot/zabbix/{server}/problems', [\App\Http\Controllers\ZabbixServerController::class, 'problems'])->name('ipilot.zabbix.problems');
+        Route::patch('/ipilot/zabbix/{server}/toggle', [\App\Http\Controllers\ZabbixServerController::class, 'toggle'])->name('ipilot.zabbix.toggle');
+        Route::delete('/ipilot/zabbix/{server}', [\App\Http\Controllers\ZabbixServerController::class, 'destroy'])->name('ipilot.zabbix.delete');
+
         // AI Engineer
         Route::get('/ai-engineer', [\App\Http\Controllers\AiEngineerController::class, 'index'])->name('ai-engineer');
         Route::post('/ai-engineer/diagnose', [\App\Http\Controllers\AiEngineerController::class, 'diagnose'])->name('ai-engineer.diagnose');
         Route::post('/ai-engineer/chat', [\App\Http\Controllers\AiEngineerController::class, 'chat'])->name('ai-engineer.chat');
+        Route::get('/ai-engineer/history', [\App\Http\Controllers\AiEngineerController::class, 'history'])->name('ai-engineer.history');
+        Route::get('/ai-engineer/history/{conversationId}', [\App\Http\Controllers\AiEngineerController::class, 'showHistory'])->where('conversationId', '[A-Za-z0-9-]+')->name('ai-engineer.history.show');
         Route::get('/ai-engineer/search', [\App\Http\Controllers\AiEngineerController::class, 'search'])->name('ai-engineer.search');
         Route::post('/ai-engineer/map-onu', [\App\Http\Controllers\AiEngineerController::class, 'mapOnu'])->name('ai-engineer.map-onu');
         Route::post('/ai-engineer/feedback', [\App\Http\Controllers\AiEngineerController::class, 'feedback'])->name('ai-engineer.feedback');
@@ -193,6 +230,7 @@ Route::middleware([
         Route::get('customer/{id}/pos-print', [\App\Http\Controllers\CustomerActionsController::class, 'printPage'])->name('customer.actions.print');
         Route::get('customers/{id}', [CustomerDetailsController::class, 'show'])->name('customers.show');
         Route::get('/customer-details/{id}', [CustomerDetailsController::class, 'show'])->name('customer.details');
+        Route::get('customer/{id}/paid-ledger', [CustomerDetailsController::class, 'paidLedger'])->name('customer.paid-ledger');
         Route::get('customers', CustomerList::class)->name('customers.index');
 
         Route::get('/new/customers', CustomerList::class)->name('customers-new');
@@ -212,6 +250,7 @@ Route::middleware([
         Route::get('/system/sync-health', [\App\Http\Controllers\SystemSyncHealthController::class, 'index'])->name('system.sync-health');
         Route::get('/network-map', NetworkMap::class)->name('network-map');
         Route::get('/network-topology/designer', NetworkTopology::class)->name('network-topology.designer');
+        Route::get('/fiber-mapping', \App\Livewire\FiberMapping::class)->name('fiber-mapping');
         Route::get('/network-topology/live', NetworkTopology::class)->defaults('mode', 'live')->name('network-topology.live');
         Route::get('/optical-audit', OpticalAudit::class)->name('optical-audit');
         Route::get('/traffic-monitor', TrafficMonitor::class)->name('traffic-monitor');
@@ -542,6 +581,11 @@ Route::middleware([
             if ($ponType !== '') $query->where('olt_type_id',$ponType);
             if (in_array(request('status'),['online','offline','unknown'],true)) $query->where('status',request('status'));
             $devices=$query->paginate(20)->withQueryString();
+            $pageDeviceIds = $devices->getCollection()->pluck('id')->all();
+            $latestLiveSnapshotIds = \App\Models\OltLiveMetricSnapshot::whereIn('olt_device_id', $pageDeviceIds)
+                ->selectRaw('MAX(id) as id')->groupBy('olt_device_id')->pluck('id')->all();
+            $liveSnapshotsByOlt = \App\Models\OltLiveMetricSnapshot::whereIn('id', $latestLiveSnapshotIds)->get()->keyBy('olt_device_id');
+            $livePortsByOlt = \App\Models\OltLiveMetricPort::whereIn('snapshot_id', $latestLiveSnapshotIds)->get()->groupBy('olt_device_id');
             $vendors = \App\Models\NetworkInventoryDevice::type('olt')->whereNotNull('vendor')->where('vendor','<>','')->distinct()->orderBy('vendor')->pluck('vendor');
             $ponTypes = \App\Models\NetworkInventoryDevice::type('olt')->whereNotNull('olt_type_id')->where('olt_type_id','<>','')->distinct()->orderBy('olt_type_id')->pluck('olt_type_id');
             $allOlts = \App\Models\NetworkInventoryDevice::type('olt');
@@ -568,13 +612,15 @@ Route::middleware([
                     'mapped' => $mapped,
                 ]];
             })->all();
-            return view('xlink.olts',['devices'=>$devices,'oltStats'=>$oltStats,'onuCountsByOlt'=>$onuCountsByOlt,'vendors'=>$vendors,'ponTypes'=>$ponTypes]);
+            return view('xlink.olts',['devices'=>$devices,'oltStats'=>$oltStats,'onuCountsByOlt'=>$onuCountsByOlt,'liveSnapshotsByOlt'=>$liveSnapshotsByOlt,'livePortsByOlt'=>$livePortsByOlt,'vendors'=>$vendors,'ponTypes'=>$ponTypes]);
         })->name('network-inventory.olt');
 
         Route::get('/network-inventory/olt/{device}/dashboard', [\App\Http\Controllers\OltDashboardController::class, 'show'])
             ->name('network-inventory.olt.dashboard');
         Route::post('/network-inventory/olt/{device}/dashboard/sync', [\App\Http\Controllers\OltDashboardController::class, 'sync'])
             ->name('network-inventory.olt.dashboard.sync');
+        Route::post('/network-inventory/olt/{device}/dashboard/metrics', [\App\Http\Controllers\OltDashboardController::class, 'pollMetrics'])
+            ->name('network-inventory.olt.dashboard.metrics');
 
         Route::get('/olts', fn () => redirect()->route('network-inventory.olt'))->name('olts');
         Route::get('/network-inventory/olt/add', fn () => view('xlink.olt-form',['device'=>new \App\Models\NetworkInventoryDevice(['type'=>'olt','status'=>'unknown','is_active'=>true]),'edit'=>false]))->name('network-inventory.olt.add');
@@ -696,6 +742,8 @@ Route::middleware([
             return back()->with('inventory_message','ONU/customer mapping saved successfully.')->with('onu_sync_success',true);
         })->name('network-inventory.olt.customers.mapping');
         Route::get('/network-inventory/olt/{device}/provisioning', [\App\Http\Controllers\OltProvisioningController::class, 'index'])->name('network-inventory.olt.provisioning');
+        Route::post('/network-inventory/olt/{device}/cli-check', [\App\Http\Controllers\OltProvisioningController::class, 'checkCliAccess'])->middleware('throttle:5,1')->name('network-inventory.olt.cli-check');
+        Route::post('/network-inventory/olt/{device}/onu/{mapping}/reboot', [\App\Http\Controllers\OltProvisioningController::class, 'rebootOnu'])->middleware('throttle:2,5')->name('network-inventory.olt.onu.reboot');
         Route::post('/network-inventory/olt/{device}/provisioning/discover', [\App\Http\Controllers\OltProvisioningController::class, 'discover'])->name('network-inventory.olt.provisioning.discover');
         Route::post('/network-inventory/olt/{device}/provisioning/execute', [\App\Http\Controllers\OltProvisioningController::class, 'execute'])->name('network-inventory.olt.provisioning.execute');
         Route::post('/network-inventory/olt/{device}/discover', [\App\Http\Controllers\OltProvisioningController::class, 'discover'])->name('network-inventory.olt.discover');
@@ -707,13 +755,23 @@ Route::middleware([
             // OLT can otherwise hold PHP-FPM until Nginx returns 504. Render the
             // last saved read-only ONU/OPM snapshot; refresh telemetry separately.
             $storedMappings=\App\Models\OltOnuCustomerMapping::where('olt_device_id',$device->id)->get();
+            $opmFreshMinutes = 30;
+            $opmFreshCutoff = now()->subMinutes($opmFreshMinutes);
             $cachedRows=$storedMappings->map(fn($m)=>[
                 'onu_id'=>$m->onu_id, 'pon_port'=>$m->pon_port, 'onu_mac'=>$m->onu_mac,
+                'opm_last_seen_at'=>$m->opm_last_seen_at,
                 // A stored number without an OPM timestamp is historical/unknown,
                 // not a valid current signal reading. Never present it as live.
                 'tx_power'=>$m->opm_last_seen_at ? $m->tx_power : null,
                 'rx_power'=>$m->opm_last_seen_at ? $m->rx_power : null,
             ])->values()->all();
+            foreach ($cachedRows as &$opmRow) {
+                $measuredAt = $opmRow['opm_last_seen_at'] ?? null;
+                $fresh = $measuredAt && \Carbon\Carbon::parse($measuredAt)->greaterThanOrEqualTo($opmFreshCutoff);
+                $opmRow['opm_fresh'] = (bool) $fresh;
+                if (!$fresh) { $opmRow['tx_power'] = null; $opmRow['rx_power'] = null; }
+            }
+            unset($opmRow);
             $storedOpmCount=collect($cachedRows)->filter(fn($r)=>is_numeric($r['tx_power']??null)||is_numeric($r['rx_power']??null))->count();
             $opm=[
                 'status'=>$storedOpmCount > 0 ? 'stored' : 'not_ready',
@@ -744,10 +802,10 @@ Route::middleware([
                 if($stored){
                     // Only reuse a saved OPM value when its measurement timestamp exists.
                     // A historical number with no measurement time must never look live.
-                    if($stored->opm_last_seen_at && !is_numeric($liveRow['tx_power']??null) && is_numeric($stored->tx_power)) $liveRow['tx_power']=(float)$stored->tx_power;
-                    if($stored->opm_last_seen_at && !is_numeric($liveRow['rx_power']??null) && is_numeric($stored->rx_power)) $liveRow['rx_power']=(float)$stored->rx_power;
+                    if($stored->opm_last_seen_at && $stored->opm_last_seen_at->greaterThanOrEqualTo($opmFreshCutoff) && !is_numeric($liveRow['tx_power']??null) && is_numeric($stored->tx_power)) $liveRow['tx_power']=(float)$stored->tx_power;
+                    if($stored->opm_last_seen_at && $stored->opm_last_seen_at->greaterThanOrEqualTo($opmFreshCutoff) && !is_numeric($liveRow['rx_power']??null) && is_numeric($stored->rx_power)) $liveRow['rx_power']=(float)$stored->rx_power;
                     if(trim((string)($liveRow['onu_mac']??''))==='' && trim((string)$stored->onu_mac)!=='') $liveRow['onu_mac']=$stored->onu_mac;
-                    if($stored->opm_last_seen_at && (is_numeric($stored->tx_power) || is_numeric($stored->rx_power))) $liveRow['stored_opm']=true;
+                    if($stored->opm_last_seen_at && $stored->opm_last_seen_at->greaterThanOrEqualTo($opmFreshCutoff) && (is_numeric($stored->tx_power) || is_numeric($stored->rx_power))) $liveRow['stored_opm']=true;
                 }
             }
             unset($liveRow);
@@ -767,8 +825,12 @@ Route::middleware([
                 return stripos($hay,$q)!==false;
             })->values();
             $ponOptions=collect($opm['onus']??[])->pluck('pon_port')->filter(fn($v)=>(string)$v!=='')->map(fn($v)=>(string)$v)->unique()->sort(SORT_NATURAL)->values();
-            return view('xlink.olt-diagnostics',compact('device','opm','rows','ponOptions','q','pon'));
+            $liveMetricsSnapshot = \App\Models\OltLiveMetricSnapshot::with('ports')->where('olt_device_id',$device->id)->latest('sampled_at')->first();
+            $lastCliCheck = \App\Models\OltProvisioningAudit::where('olt_device_id',$device->id)->where('action','cli_health_check')->latest('id')->first();
+            $freshOpmCount = collect($opm['onus']??[])->filter(fn($r)=>!empty($r['opm_fresh']) && (is_numeric($r['rx_power']??null)||is_numeric($r['tx_power']??null)))->count();
+            return view('xlink.olt-diagnostics',compact('device','opm','rows','ponOptions','q','pon','opmFreshMinutes','freshOpmCount','liveMetricsSnapshot','lastCliCheck'));
         })->name('network-inventory.olt.diagnostics');
+        Route::post('/network-inventory/olt/{device}/diagnostics/metrics', [\App\Http\Controllers\OltDashboardController::class, 'pollDiagnosticsMetrics'])->name('network-inventory.olt.diagnostics.metrics');
         Route::post('/network-inventory/olt/{device}/diagnostic-check', function(\App\Models\NetworkInventoryDevice $device, \App\Services\NetworkInventoryHealthProbe $probe){
             abort_unless($device->type==='olt',404);
             $host=$device->ip_address ?: $device->host;
@@ -846,8 +908,8 @@ Route::middleware([
         Route::get('/network-inventory/onu-mac-ledger', [\App\Http\Controllers\OnuMacLedgerController::class, 'index'])
             ->name('network-inventory.onu-mac-ledger');
 
-        // FTTH ONU Management: database-backed subscriber/ONU ledger. This page
-        // never invents live telemetry and does not issue disruptive OLT commands.
+        // FTTH ONU Management: database-backed subscriber/ONU ledger. GET rendering remains
+        // read-only; the separate audited reboot POST is available only after fresh CLI verification.
         Route::get('/network-inventory/onu-management', function () {
             $query = \App\Models\OltOnuCustomerMapping::with(['customer','pppUser','olt'])->latest('id');
             $q = trim((string) request('q', ''));
@@ -868,6 +930,12 @@ Route::middleware([
             elseif ($signal === 'warning') $query->whereNotNull('opm_last_seen_at')->whereNotNull('rx_power')->whereBetween('rx_power',[-27,-20]);
             elseif ($signal === 'critical') $query->whereNotNull('opm_last_seen_at')->whereNotNull('rx_power')->where('rx_power','<',-27);
             $mappings = $query->paginate(25)->withQueryString();
+            $pageOltIds = $mappings->getCollection()->pluck('olt_device_id')->filter()->unique()->values();
+            $latestCliChecks = $pageOltIds->isNotEmpty()
+                ? \App\Models\OltProvisioningAudit::whereIn('olt_device_id',$pageOltIds)->where('action','cli_health_check')->latest('id')->get()->groupBy('olt_device_id')->map(fn($items)=>$items->first())
+                : collect();
+            // A CLI check must have passed recently before the restart button is enabled.
+            $rebootReadyOltIds = $latestCliChecks->filter(fn($check)=>$check->status==='success' && $check->created_at && $check->created_at->greaterThanOrEqualTo(now()->subMinutes(15)))->keys()->map(fn($id)=>(int)$id)->values()->all();
             $base = \App\Models\OltOnuCustomerMapping::query();
             $stats = [
                 'total' => (clone $base)->count(),
@@ -877,7 +945,7 @@ Route::middleware([
                 'mapped' => (clone $base)->whereNotNull('customer_id')->count(),
             ];
             $olts = \App\Models\NetworkInventoryDevice::type('olt')->orderBy('name')->get(['id','name','vendor','location']);
-            return view('xlink.onu-management', compact('mappings','stats','olts','q','oltId','status','signal'));
+            return view('xlink.onu-management', compact('mappings','stats','olts','q','oltId','status','signal','rebootReadyOltIds'));
         })->name('network-inventory.onu-management');
 
         Route::get('/network-inventory/onu-management/export.csv', function () {
@@ -1266,6 +1334,11 @@ Route::middleware([
             ];
             return view('xlink.company-billing-operations',compact('settings'));
         })->name('company-settings.billing-operations');
+        Route::get('/company-settings/area-zone-setup', [\App\Http\Controllers\CompanyAreaZoneController::class, 'index'])->name('company-settings.area-zone-setup');
+        Route::post('/company-settings/area-zone-setup', [\App\Http\Controllers\CompanyAreaZoneController::class, 'store'])->name('company-settings.area-zone-setup.store');
+        Route::put('/company-settings/area-zone-setup/{tab}/{id}', [\App\Http\Controllers\CompanyAreaZoneController::class, 'update'])->name('company-settings.area-zone-setup.update');
+        Route::post('/company-settings/area-zone-setup/{tab}/{id}/toggle', [\App\Http\Controllers\CompanyAreaZoneController::class, 'toggle'])->name('company-settings.area-zone-setup.toggle');
+        Route::delete('/company-settings/area-zone-setup/{tab}/{id}', [\App\Http\Controllers\CompanyAreaZoneController::class, 'destroy'])->name('company-settings.area-zone-setup.delete');
         Route::post('/company-settings/billing-operations', function (\Illuminate\Http\Request $request) {
             $data=$request->validate([
                 'disable_check_no'=>'required|integer|min:0|max:30',
@@ -1279,12 +1352,48 @@ Route::middleware([
             return redirect()->route('company-settings.billing-operations')->with('company_settings_message','Billing operations settings saved. The existing scheduled billing/disconnect jobs read these operational values.');
         })->name('company-settings.billing-operations.save');
         Route::get('/company-settings/service-configuration', function () {
-            $category=trim((string)request('category','connection_type'));
-            $categories=['connection_type'=>'Connection Types','protocol'=>'Network Protocols','customer_type'=>'Customer Types','billing_status'=>'Billing Statuses','bandwidth_type'=>'Bandwidth Types'];
-            if(!array_key_exists($category,$categories))$category='connection_type';
-            $options=\App\Models\CompanyServiceOption::where('category',$category)->orderBy('name')->paginate(20)->withQueryString();
-            $counts=\App\Models\CompanyServiceOption::selectRaw('category,count(*) as total,sum(case when is_active = 1 then 1 else 0 end) as active_total')->groupBy('category')->get()->keyBy('category');
-            return view('xlink.company-service-configuration',compact('category','categories','options','counts'));
+            $category = trim((string) request('category', 'connection_type'));
+            $categories = [
+                'connection_type' => 'Connection Types',
+                'protocol' => 'Protocols',
+                'customer_type' => 'Customer Types',
+                'billing_status' => 'Billing Status',
+                'bandwidth_type' => 'Bandwidth Types',
+            ];
+            if (! array_key_exists($category, $categories)) {
+                $category = 'connection_type';
+            }
+
+            $search = trim((string) request('q', ''));
+            $status = (string) request('status', 'all');
+            $query = \App\Models\CompanyServiceOption::query()->where('category', $category);
+
+            if ($search !== '') {
+                $query->where(function ($builder) use ($search) {
+                    $builder->where('name', 'like', '%' . $search . '%')
+                        ->orWhere('code', 'like', '%' . $search . '%')
+                        ->orWhere('description', 'like', '%' . $search . '%');
+                });
+            }
+            if ($status === 'active') {
+                $query->where('is_active', true);
+            } elseif ($status === 'inactive') {
+                $query->where('is_active', false);
+            }
+
+            $options = $query
+                ->when($category === 'bandwidth_type', fn ($builder) => $builder->orderBy('sort_order')->orderBy('name'))
+                ->when($category !== 'bandwidth_type', fn ($builder) => $builder->orderBy('name'))
+                ->paginate(10)
+                ->withQueryString();
+
+            $counts = \App\Models\CompanyServiceOption::query()
+                ->selectRaw('category, count(*) as total, sum(case when is_active = 1 then 1 else 0 end) as active_total, sum(case when is_system = 1 then 1 else 0 end) as system_total')
+                ->groupBy('category')
+                ->get()
+                ->keyBy('category');
+
+            return view('xlink.company-service-configuration', compact('category', 'categories', 'options', 'counts', 'search', 'status'));
         })->name('company-settings.service-configuration');
         Route::post('/company-settings/service-configuration', function (\Illuminate\Http\Request $request) {
             $data=$request->validate([
@@ -1292,8 +1401,10 @@ Route::middleware([
                 'code'=>'required|string|max:80|regex:/^[A-Za-z0-9_-]+$/',
                 'name'=>'required|string|max:120',
                 'description'=>'nullable|string|max:500',
+                'sort_order'=>'nullable|integer|min:0|max:9999',
             ]);
             $data['code']=trim($data['code']);
+            $data['sort_order']=(int)($data['sort_order']??0);
             $data['name']=trim($data['name']);
             \Illuminate\Support\Facades\Validator::make($data,[
                 'code'=>['required','string','max:80',\Illuminate\Validation\Rule::unique('company_service_options','code')->where(fn($q)=>$q->where('category',$data['category']))],
@@ -1302,7 +1413,11 @@ Route::middleware([
             return redirect()->route('company-settings.service-configuration',['category'=>$data['category']])->with('company_settings_message','Service option added.');
         })->name('company-settings.service-configuration.store');
         Route::put('/company-settings/service-configuration/{option}', function (\Illuminate\Http\Request $request, \App\Models\CompanyServiceOption $option) {
-            $data=$request->validate(['name'=>'required|string|max:120','description'=>'nullable|string|max:500']);
+            $data = $request->validate([
+                'name' => 'required|string|max:120',
+                'description' => 'nullable|string|max:500',
+                'sort_order' => 'nullable|integer|min:0|max:9999',
+            ]);
             $option->update($data);
             return back()->with('company_settings_message','Service option updated.');
         })->name('company-settings.service-configuration.update');
@@ -1311,6 +1426,7 @@ Route::middleware([
             return back()->with('company_settings_message','Service option status updated.');
         })->name('company-settings.service-configuration.toggle');
         Route::delete('/company-settings/service-configuration/{option}', function (\App\Models\CompanyServiceOption $option) {
+            abort_if($option->category === 'billing_status' && $option->is_system, 403, 'System billing statuses are protected. Disable them instead of deleting them.');
             $used=false;
             if($option->category==='connection_type')$used=\App\Models\OfficialInfo::where('connection_type',$option->code)->exists();
             elseif($option->category==='customer_type')$used=\App\Models\OfficialInfo::where('client_type',$option->code)->exists();
@@ -1416,6 +1532,10 @@ Route::middleware([
         Route::post('/mobile-banking/methods', [\App\Http\Controllers\MobileBankingController::class, 'saveMethod'])->name('mobile-banking.methods.save');
         Route::get('/mobile-banking/settings', [\App\Http\Controllers\MobileBankingController::class, 'settings'])->name('mobile-banking.settings');
         Route::post('/mobile-banking/settings', [\App\Http\Controllers\MobileBankingController::class, 'updateSettings'])->name('mobile-banking.settings.update');
+        Route::get('/mobile-banking/subscriptions', [\App\Http\Controllers\MobileBankingController::class, 'subscriptions'])->name('mobile-banking.subscriptions');
+        Route::post('/mobile-banking/subscriptions/prices', [\App\Http\Controllers\Payment\StripeSubscriptionController::class, 'savePriceMapping'])->name('mobile-banking.subscriptions.prices.save');
+        Route::post('/mobile-banking/subscriptions/prices/{mapping}/toggle', [\App\Http\Controllers\Payment\StripeSubscriptionController::class, 'togglePriceMapping'])->name('mobile-banking.subscriptions.prices.toggle');
+        Route::delete('/mobile-banking/subscriptions/prices/{mapping}', [\App\Http\Controllers\Payment\StripeSubscriptionController::class, 'deletePriceMapping'])->name('mobile-banking.subscriptions.prices.delete');
         Route::get('/bandwidth-reseller', [\App\Http\Controllers\Admin\BandwidthResellerController::class, 'index'])->name('xlink.bandwidth-reseller');
         Route::get('/bandwidth-resellers', [\App\Http\Controllers\Admin\BandwidthResellerController::class,'index'])->name('bandwidth-resellers');
         Route::post('/bandwidth-resellers', [\App\Http\Controllers\Admin\BandwidthResellerController::class,'store'])->name('bandwidth-resellers.store');
@@ -1424,6 +1544,10 @@ Route::middleware([
         Route::get('/bandwidth-services', [\App\Http\Controllers\Admin\BandwidthResellerController::class,'services'])->name('bandwidth-services');
         Route::post('/bandwidth-services', [\App\Http\Controllers\Admin\BandwidthResellerController::class,'storeService'])->name('bandwidth-services.store');
         Route::post('/bandwidth-services/{service}/toggle', [\App\Http\Controllers\Admin\BandwidthResellerController::class,'toggleService'])->name('bandwidth-services.toggle');
+        Route::get('/bandwidth-trading', [\App\Http\Controllers\Admin\BandwidthResellerController::class,'trading'])->name('bandwidth-trading');
+        Route::post('/bandwidth-trading/provider', [\App\Http\Controllers\Admin\BandwidthResellerController::class,'storeProvider'])->name('bandwidth-trading.provider.store');
+        Route::post('/bandwidth-trading', [\App\Http\Controllers\Admin\BandwidthResellerController::class,'storeTrading'])->name('bandwidth-trading.store');
+        Route::post('/bandwidth-trading/{transaction}/pay', [\App\Http\Controllers\Admin\BandwidthResellerController::class,'payTrading'])->name('bandwidth-trading.pay');
         Route::get('/bandwidth-invoices', [\App\Http\Controllers\Admin\BandwidthResellerController::class,'invoices'])->name('bandwidth-invoices');
         Route::post('/bandwidth-invoices', [\App\Http\Controllers\Admin\BandwidthResellerController::class,'storeInvoice'])->name('bandwidth-invoices.store');
         Route::post('/bandwidth-invoices/{invoice}/pay', [\App\Http\Controllers\Admin\BandwidthResellerController::class,'payInvoice'])->name('bandwidth-invoices.pay');
@@ -1554,9 +1678,16 @@ Route::middleware(EnsurePortalPort::class)->group(function () {
         Route::get('/payment/bkash/initiate', [BkashPaymentController::class, 'initiate'])->name('payment.bkash.initiate');
         Route::get('/payment/nagad/initiate', [NagadPaymentController::class, 'initiate'])->name('payment.nagad.initiate');
         Route::get('/payment/sslcommerz/initiate', [SslCommerzPaymentController::class, 'initiate'])->name('payment.sslcommerz.initiate');
+        Route::get('/payment/stripe/subscribe', [\App\Http\Controllers\Payment\StripeSubscriptionController::class, 'checkout'])->name('payment.stripe.checkout');
+        Route::get('/payment/stripe/portal', [\App\Http\Controllers\Payment\StripeSubscriptionController::class, 'portal'])->name('payment.stripe.portal');
+        Route::get('/payment/stripe/success', [\App\Http\Controllers\Payment\StripeSubscriptionController::class, 'success'])->name('payment.stripe.success');
+        Route::get('/payment/stripe/cancel', [\App\Http\Controllers\Payment\StripeSubscriptionController::class, 'cancel'])->name('payment.stripe.cancel');
     });
 
-    // Public payment callback routes (Gateways redirect here, CSRF is disabled for POSTs)
+    // Stripe server-to-server webhook, authenticated by Stripe signature instead of a portal session.
+    Route::post('/payment/stripe/webhook', \App\Http\Controllers\Payment\StripeWebhookController::class)->name('payment.stripe.webhook');
+
+    // Public payment callback routes
     Route::any('/payment/bkash/callback', [BkashPaymentController::class, 'callback'])->name('payment.bkash.callback');
     Route::any('/payment/nagad/callback', [NagadPaymentController::class, 'callback'])->name('payment.nagad.callback');
     Route::any('/payment/sslcommerz/callback', [SslCommerzPaymentController::class, 'callback'])->name('payment.sslcommerz.callback');

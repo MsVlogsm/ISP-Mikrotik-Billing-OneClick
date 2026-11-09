@@ -5,8 +5,9 @@
 <style>
 .broadband-customer-table th{white-space:nowrap;font-size:.78rem;text-transform:uppercase;letter-spacing:.03em}
 .broadband-customer-table td{vertical-align:middle}
-.customer-actions{min-width:145px}.customer-actions form{display:inline}
-.customer-actions .btn{margin:.12rem}.customer-diagnostics{display:inline-flex;align-items:center;gap:.15rem;flex-wrap:wrap}.customer-diagnostic-result{font-size:.75rem;min-height:1.1rem}.traffic-metric{border:1px solid var(--bs-border-color);border-radius:.6rem;padding:.8rem 1rem}.traffic-metric small{display:block;color:var(--bs-secondary-color)}.traffic-metric strong{font-size:1.25rem}.traffic-live-dot{display:inline-block;width:.5rem;height:.5rem;border-radius:50%;background:currentColor;box-shadow:0 0 0 .25rem color-mix(in srgb,currentColor 12%,transparent)}.customer-live-pulse{display:inline-block;width:.55rem;height:.55rem;border-radius:50%;background:#16a34a;animation:customerPulse 1.5s infinite;vertical-align:middle;margin-right:.35rem}@keyframes customerPulse{0%{box-shadow:0 0 0 0 rgba(22,163,74,.55)}70%{box-shadow:0 0 0 .4rem rgba(22,163,74,0)}100%{box-shadow:0 0 0 0 rgba(22,163,74,0)}}@media(prefers-reduced-motion:reduce){.customer-live-pulse{animation:none}}
+.customer-actions{min-width:145px;white-space:normal}.customer-actions form{display:inline}
+.customer-actions details.left-recovery-editor{display:block;position:relative;min-width:0;width:100%;max-width:190px}.customer-actions details.left-recovery-editor[open]{z-index:5}.customer-actions details.left-recovery-editor summary{white-space:nowrap;font-size:.75rem}.customer-actions details.left-recovery-editor form{display:block;width:min(280px,calc(100vw - 48px));max-width:280px;max-height:65vh;overflow-y:auto;position:absolute;right:0;top:calc(100% + 6px);z-index:1050;box-shadow:0 .5rem 1.25rem rgba(0,0,0,.18);background:var(--bs-body-bg)!important}
+.customer-actions .btn{margin:.12rem}.customer-onu-optical{min-width:155px}.customer-diagnostics{display:inline-flex;align-items:center;gap:.15rem;flex-wrap:wrap}.customer-diagnostic-result{font-size:.75rem;min-height:1.1rem}.traffic-metric{border:1px solid var(--bs-border-color);border-radius:.6rem;padding:.8rem 1rem}.traffic-metric small{display:block;color:var(--bs-secondary-color)}.traffic-metric strong{font-size:1.25rem}.traffic-live-dot{display:inline-block;width:.5rem;height:.5rem;border-radius:50%;background:currentColor;box-shadow:0 0 0 .25rem color-mix(in srgb,currentColor 12%,transparent)}.customer-live-pulse{display:inline-block;width:.55rem;height:.55rem;border-radius:50%;background:#16a34a;animation:customerPulse 1.5s infinite;vertical-align:middle;margin-right:.35rem}@keyframes customerPulse{0%{box-shadow:0 0 0 0 rgba(22,163,74,.55)}70%{box-shadow:0 0 0 .4rem rgba(22,163,74,0)}100%{box-shadow:0 0 0 0 rgba(22,163,74,0)}}@media(prefers-reduced-motion:reduce){.customer-live-pulse{animation:none}}
 .customer-meta{font-size:.78rem}.filter-card .form-label{font-size:.78rem;font-weight:600;color:#6c757d}
 </style>
 @endpush
@@ -78,6 +79,12 @@
                     <label class="form-label mb-1">Search customer</label>
                     <input class="form-control" name="q" value="{{ request('q') }}" placeholder="CID, name, mobile, username, IP, NID, address, router or package">
                 </div>
+                @if($mode === 'paid')
+                    <div class="col-6 col-lg-2">
+                        <label class="form-label mb-1">Payment Month</label>
+                        <input class="form-control" type="month" name="paid_month" value="{{ $paidMonth ?? now()->format('Y-m') }}">
+                    </div>
+                @endif
                 <div class="col-6 col-lg-2">
                     <label class="form-label mb-1">Router</label>
                     <select class="form-select" name="router_id">
@@ -129,7 +136,12 @@
     <div class="card shadow-sm border-0">
         <div class="card-header bg-transparent d-flex justify-content-between align-items-center">
             <strong>{{ $mode === 'inactive' ? 'Left Customer Register' : ($mode === 'disabled' ? 'Disabled Customer List' : 'Customer List') }}</strong>
-            <span class="text-muted small">{{ number_format($customers->total()) }} records</span>
+            <div class="text-end">
+                @if($mode === 'paid' && !empty($paidMonth))
+                    <div class="small text-muted">Fully settled bill · {{ \Carbon\Carbon::createFromFormat('!Y-m', $paidMonth)->format('F Y') }}</div>
+                @endif
+                <span class="text-muted small">{{ number_format($customers->total()) }} records</span>
+            </div>
         </div>
         <div class="table-responsive">
             <table class="table table-hover align-middle mb-0 broadband-customer-table">
@@ -140,7 +152,7 @@
                             <th>Package</th><th>Server</th><th>Left Date</th><th>Products</th><th>Recovery</th><th>Status</th><th>Left Reason</th><th>Actions</th>
                         @else
                             <th>CID</th><th>Customer</th><th>Connection</th><th>Mobile</th><th>Package</th>
-                            <th>Router</th><th>Billing</th><th>Address / Area</th><th>Status</th><th>Actions</th>
+                            <th>Router</th><th>IP Address</th><th>MAC Address</th><th>ONU Optical Power</th><th>Billing</th><th>Address / Area</th><th>Status</th><th>Actions</th>
                         @endif
                     </tr>
                 </thead>
@@ -201,6 +213,29 @@
                             </td>
                             <td>{{ $c->package->package ?? $c->pppUser->package_name ?? '—' }}</td>
                             <td>{{ $c->pppUser->router_name ?? '—' }}</td>
+                            <td class="text-nowrap">
+                                @php($displayPppIp = $mode === 'online' ? $c->live_ppp_ip : (filter_var($c->pppUser?->ppp_remote_ip, FILTER_VALIDATE_IP) ? $c->pppUser->ppp_remote_ip : null))
+                                {{ $displayPppIp ?: '—' }}
+                                @if($mode === 'online' && $displayPppIp)<div class="customer-meta text-success">Live</div>@endif
+                            </td>
+                            <td class="text-nowrap">
+                                @php($displayPppMac = $mode === 'online' ? ($c->live_ppp_mac ?: $c->pppUser?->last_caller_id ?: $c->pppUser?->caller_id) : ($c->pppUser?->caller_id ?: $c->pppUser?->last_caller_id))
+                                {{ $displayPppMac ?: '—' }}
+                                @if($mode === 'online' && $c->live_ppp_mac)<div class="customer-meta text-success">Live</div>@endif
+                            </td>
+                            <td class="text-nowrap customer-onu-optical">
+                                @php($onuRx = $c->live_onu_rx_power)
+                                @php($onuRxClass = $onuRx===null ? 'secondary' : ($onuRx >= -20 ? 'success' : ($onuRx >= -27 ? 'warning' : 'danger')))
+                                @if($onuRx !== null)
+                                    <span class="badge text-bg-{{ $onuRxClass }}">RX {{ number_format($onuRx,2) }} dBm</span>
+                                    <div class="customer-meta">TX {{ is_numeric($c->live_onu_tx_power) ? number_format((float)$c->live_onu_tx_power,2).' dBm' : '—' }}</div>
+                                    <div class="customer-meta" title="{{ $c->live_onu_olt_name }} · PON {{ $c->live_onu_pon }} · ONU {{ $c->live_onu_id }}">{{ $c->live_onu_olt_name ?: 'OLT' }} · PON {{ $c->live_onu_pon ?: '—' }} / ONU {{ $c->live_onu_id ?: '—' }}</div>
+                                    <div class="customer-meta text-muted">OPM {{ $c->live_onu_opm_at?->diffForHumans() ?: '—' }}</div>
+                                @else
+                                    <span class="badge text-bg-secondary">Unavailable</span>
+                                    <div class="customer-meta text-muted">No fresh OPM sample (30 min)</div>
+                                @endif
+                            </td>
                             <td>
                                 <div>Bill: {{ number_format($c->billing?->total_amount ?? 0, 2) }} ৳</div>
                                 <div class="{{ ($c->billing?->due_amount ?? 0) > 0 ? 'text-danger' : 'text-success' }}">Due: {{ number_format($c->billing?->due_amount ?? 0, 2) }} ৳</div>
@@ -241,7 +276,7 @@
                                 @endif
                             </div>
                             @if($mode === 'inactive' && (auth()->user()->hasRole('Super Admin') || hasAccess(['Super Admin'], ['edit-customer'])))
-                                <details class="mt-2" style="min-width:230px">
+                                <details class="mt-2 left-recovery-editor">
                                     <summary class="small text-primary" style="cursor:pointer">Edit left/recovery details</summary>
                                     <form method="POST" action="{{ route('broadband-customer-left-details', $customerId) }}" class="border rounded p-2 mt-2 bg-light">
                                         @csrf @method('PATCH')
@@ -271,7 +306,7 @@
                         </td>
                     </tr>
                 @empty
-                    <tr><td colspan="{{ $mode === 'inactive' ? 14 : 10 }}" class="text-center py-5 text-muted">No customers found.</td></tr>
+                    <tr><td colspan="{{ $mode === 'inactive' ? 14 : 10 }}" class="text-center py-5 text-muted">{{ $mode === 'paid' ? 'No fully settled customers found for '.(\Carbon\Carbon::createFromFormat('!Y-m', $paidMonth ?? now()->format('Y-m'))->format('F Y')).'.' : 'No customers found.' }}</td></tr>
                 @endforelse
                 </tbody>
             </table>

@@ -104,6 +104,10 @@
                                     <i class="bi bi-arrow-repeat me-1"></i><span>Sync ONU</span>
                                 </button>
                             </form>
+                            <button type="button" wire:click="refreshLiveOnlineStatus" wire:loading.attr="disabled" wire:target="refreshLiveOnlineStatus" class="btn btn-outline-primary btn-sm rounded-pill px-3 py-0 shadow-none fw-600" style="height: 2rem;" title="Clear the short-lived PPP session cache and refresh live online status">
+                                <span wire:loading.remove wire:target="refreshLiveOnlineStatus"><i class="bi bi-wifi me-1"></i>Sync Online</span>
+                                <span wire:loading wire:target="refreshLiveOnlineStatus"><span class="spinner-border spinner-border-sm me-1"></span>Refreshing…</span>
+                            </button>
                             <button type="button" id="reset_table" class="btn btn-light btn-outline-dark btn-sm rounded-pill px-3 py-0 shadow-none fw-600" style="height: 2rem;" title="Reset all filters and search">
                                 <i class="bi bi-arrow-clockwise"></i> {{ __('Reset') }}
                             </button>
@@ -116,7 +120,7 @@
 
     <div class="card border-0 shadow-sm m-sm-0 m-md-3 p-0 overflow-hidden customer-table-card">
         <div class="table-responsive bg-white px-3 pb-3" wire:ignore>
-            <table class="customer-table table table-hover custom-data-table border-0 w-100" style="width:100%">
+            <table class="customer-table customer-table--compact table table-hover custom-data-table border-0 w-100" style="width:100%">
                 <thead class="bg-light">
                     <tr>
                         <th class="text-center" style="width:36px;"><input type="checkbox" id="select-all-customers" class="form-check-input" title="{{ __('Select All') }}" aria-label="{{ __('Select All') }}"></th>
@@ -125,6 +129,7 @@
                         <th>{{ __('Connection') }}</th>
                         <th>{{ __('Mobile') }}</th>
                         <th>{{ __('Package') }}</th>
+                        <th>{{ __('ONU RX Power') }}</th>
                         <th>{{ __('Billing Date') }}</th>
                         <th class="text-end">{{ __('Balance') }}</th>
                         <th>{{ __('Expiry') }}</th>
@@ -394,22 +399,77 @@
         .customer-row-actions .dropdown-toggle { border-radius: 9px; font-size: .78rem; font-weight: 700; white-space: nowrap; }
         .customer-row-actions .dropdown-menu { min-width: 235px; max-height: 70vh; overflow-y: auto; padding: .45rem; border: 1px solid #e7ebf3; border-radius: 12px; z-index: 1085; }
         .customer-row-actions .dropdown-item { border-radius: 7px; padding: .48rem .65rem; font-size: .82rem; }
-        /* Anchor actions are permitted menu items, not disabled links. Explicitly override
-           inherited theme link colors so they remain readable like the button actions. */
-        .customer-row-actions .dropdown-menu a.dropdown-item {
+        /* Customer row action submenu: explicit, readable surfaces in both themes. */
+        .customer-row-actions .dropdown-menu {
+            --bs-dropdown-bg: #ffffff;
+            --bs-dropdown-color: #25364d;
+            --bs-dropdown-link-color: #25364d;
+            --bs-dropdown-link-hover-color: #14243a;
+            --bs-dropdown-link-hover-bg: #eaf0ff;
+            --bs-dropdown-link-active-color: #ffffff;
+            --bs-dropdown-link-active-bg: #2457a6;
+            --bs-dropdown-divider-bg: #d5deeb;
             color: #25364d !important;
+            background: #ffffff !important;
+            border-color: #c4d0df !important;
+            box-shadow: 0 .65rem 1.5rem rgba(15, 23, 42, .18) !important;
+        }
+        .customer-row-actions .dropdown-menu :is(a.dropdown-item, button.dropdown-item) {
+            color: #25364d !important;
+            background: transparent !important;
             opacity: 1 !important;
             pointer-events: auto !important;
             cursor: pointer !important;
             text-decoration: none !important;
+            font-weight: 600 !important;
+            text-align: left;
         }
-        .customer-row-actions .dropdown-menu a.dropdown-item:hover,
-        .customer-row-actions .dropdown-menu a.dropdown-item:focus {
+        .customer-row-actions .dropdown-menu :is(a.dropdown-item, button.dropdown-item):hover,
+        .customer-row-actions .dropdown-menu :is(a.dropdown-item, button.dropdown-item):focus-visible {
             color: #14243a !important;
             background: #eaf0ff !important;
+            outline: none;
         }
-        .customer-row-actions .dropdown-menu a.dropdown-item i { opacity: 1 !important; }
-        .customer-row-actions .dropdown-item:hover { background: #f2f5ff; }
+        .customer-row-actions .dropdown-menu :is(a.dropdown-item, button.dropdown-item):active,
+        .customer-row-actions .dropdown-menu :is(a.dropdown-item, button.dropdown-item).active {
+            color: #ffffff !important;
+            background: #2457a6 !important;
+        }
+        .customer-row-actions .dropdown-menu .dropdown-divider { border-top-color: #d5deeb !important; opacity: 1; }
+        .customer-row-actions .dropdown-menu .dropdown-item i { color: #315b9a !important; opacity: 1 !important; }
+        .customer-row-actions .dropdown-menu .dropdown-item .text-primary { color: #2457a6 !important; }
+
+        html[data-bs-theme="dark"] .customer-row-actions .dropdown-menu {
+            --bs-dropdown-bg: #17263b;
+            --bs-dropdown-color: #edf4ff;
+            --bs-dropdown-link-color: #edf4ff;
+            --bs-dropdown-link-hover-color: #ffffff;
+            --bs-dropdown-link-hover-bg: #29415f;
+            --bs-dropdown-link-active-color: #ffffff;
+            --bs-dropdown-link-active-bg: #245b96;
+            --bs-dropdown-divider-bg: #405773;
+            color: #edf4ff !important;
+            background: #17263b !important;
+            border-color: #49627f !important;
+            box-shadow: 0 .75rem 1.8rem rgba(0, 0, 0, .42) !important;
+        }
+        html[data-bs-theme="dark"] .customer-row-actions .dropdown-menu :is(a.dropdown-item, button.dropdown-item) {
+            color: #eaf2ff !important;
+            background: transparent !important;
+        }
+        html[data-bs-theme="dark"] .customer-row-actions .dropdown-menu :is(a.dropdown-item, button.dropdown-item):hover,
+        html[data-bs-theme="dark"] .customer-row-actions .dropdown-menu :is(a.dropdown-item, button.dropdown-item):focus-visible {
+            color: #ffffff !important;
+            background: #29415f !important;
+        }
+        html[data-bs-theme="dark"] .customer-row-actions .dropdown-menu :is(a.dropdown-item, button.dropdown-item):active,
+        html[data-bs-theme="dark"] .customer-row-actions .dropdown-menu :is(a.dropdown-item, button.dropdown-item).active {
+            color: #ffffff !important;
+            background: #245b96 !important;
+        }
+        html[data-bs-theme="dark"] .customer-row-actions .dropdown-menu .dropdown-divider { border-top-color: #405773 !important; }
+        html[data-bs-theme="dark"] .customer-row-actions .dropdown-menu .dropdown-item i,
+        html[data-bs-theme="dark"] .customer-row-actions .dropdown-menu .dropdown-item .text-primary { color: #9fc8ff !important; opacity: 1 !important; }
         .customer-filter-card,
         .customer-table-card {
             border-radius: 14px !important;
@@ -675,6 +735,130 @@
             font-size: 0.8rem;
             color: #6c757d;
         }
+
+        /* Sweet Billing-inspired compact customer rows. Keep every data field and action. */
+        .customer-table-card .table-responsive {
+            padding: 0 .5rem .5rem !important;
+        }
+        .customer-table--compact {
+            border-collapse: separate !important;
+            border-spacing: 0 2px !important;
+            font-size: .76rem !important;
+            line-height: 1.22 !important;
+        }
+        .customer-table--compact thead th {
+            padding: 7px 7px !important;
+            font-size: .67rem !important;
+            letter-spacing: .025em !important;
+            border-bottom: 1px solid var(--bs-border-color) !important;
+        }
+        .customer-table--compact tbody td {
+            padding: 5px 7px !important;
+            line-height: 1.22 !important;
+            vertical-align: middle !important;
+            border-top: 1px solid rgba(148, 163, 184, .12) !important;
+        }
+        .customer-table--compact tbody tr {
+            box-shadow: 0 1px 3px rgba(15, 23, 42, .025) !important;
+            transition: background-color .15s ease, box-shadow .15s ease !important;
+        }
+        .customer-table--compact tbody tr:hover {
+            transform: none !important;
+            box-shadow: 0 2px 7px rgba(15, 23, 42, .07) !important;
+        }
+        .customer-table--compact .customer-cid-live {
+            gap: .3rem !important;
+        }
+        .customer-table--compact .customer-live-dot {
+            width: .45rem !important;
+            height: .45rem !important;
+            flex-basis: .45rem !important;
+        }
+        .customer-table--compact .customer-live-status {
+            display: inline !important;
+            margin-left: .22rem;
+            font-size: .64rem !important;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .customer-table--compact .badge {
+            padding: .25em .45em !important;
+            font-size: .66rem !important;
+            line-height: 1.15 !important;
+        }
+        .customer-table--compact .customer-call-action {
+            width: 23px;
+            height: 23px;
+            padding: 0 !important;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            vertical-align: middle;
+        }
+        .customer-table--compact .customer-call-label {
+            display: none;
+        }
+        .customer-table--compact tbody td:nth-child(3),
+        .customer-table--compact tbody td:nth-child(4),
+        .customer-table--compact tbody td:nth-child(5),
+        .customer-table--compact tbody td:nth-child(6),
+        .customer-table--compact tbody td:nth-child(7),
+        .customer-table--compact tbody td:nth-child(8),
+        .customer-table--compact tbody td:nth-child(9),
+        .customer-table--compact tbody td:nth-child(10),
+        .customer-table--compact tbody td:nth-child(12),
+        .customer-table--compact tbody td:nth-child(13),
+        .customer-table--compact tbody td:nth-child(14) {
+            white-space: nowrap;
+        }
+        .customer-table--compact tbody td:nth-child(7) .d-inline-flex {
+            flex-direction: row !important;
+            align-items: center !important;
+            gap: .3rem !important;
+            white-space: nowrap;
+        }
+        .customer-table--compact tbody td:nth-child(7) .d-inline-flex small {
+            display: inline-block;
+            max-width: 112px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .customer-table--compact tbody td:nth-child(11) {
+            max-width: 175px;
+            min-width: 110px;
+        }
+        .customer-table--compact tbody td:nth-child(11) > span {
+            display: inline-block;
+            max-width: 165px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            vertical-align: middle;
+        }
+        .customer-table--compact .customer-row-actions .dropdown-toggle {
+            padding: .28rem .45rem !important;
+            font-size: .68rem !important;
+            line-height: 1.2 !important;
+            border-radius: 7px !important;
+        }
+        .customer-table--compact .customer-row-actions .dropdown-menu .dropdown-item {
+            padding: .42rem .6rem;
+            font-size: .78rem;
+        }
+        @media (max-width: 767.98px) {
+            .customer-table--compact {
+                font-size: .72rem !important;
+            }
+            .customer-table--compact thead th {
+                padding: 6px 6px !important;
+                font-size: .63rem !important;
+            }
+            .customer-table--compact tbody td {
+                padding: 5px 6px !important;
+            }
+        }
     </style>
 @endpush
 
@@ -694,7 +878,7 @@
                 processing: true,
                 // serverSide: true,
                 pagingType: 'full_numbers',
-                pageLength: 10,
+                pageLength: 50,
                 lengthChange: true,
                 searchable: true,
                 lengthMenu: [
@@ -782,6 +966,7 @@
                     { data: 'connection', name: 'ppp_user.username', title: '{{ __('Connection') }}', className: 'text-start' },
                     { data: 'mobile_display', name: 'mobile', title: '{{ __('Mobile') }}', className: 'text-start' },
                     { data: 'package_display', name: 'package.package', title: '{{ __('Package') }}', className: 'text-start' },
+                    { data: 'onu_rx_power_display', name: 'onu_rx_power_display', title: '{{ __('ONU RX Power') }}', orderable: false, searchable: false, className: 'text-start' },
                     { data: 'billing_date_display', name: 'billing.auto_disable_date', title: '{{ __('Billing Date') }}', className: 'text-start' },
                     { data: 'balance_display', name: 'billing.due_amount', title: '{{ __('Balance') }}', className: 'text-end' },
                     { data: 'expiry_display', name: 'billing.auto_disable_date', title: '{{ __('Expiry') }}', className: 'text-start' },
@@ -965,5 +1150,6 @@
             };
 
             $wire.on('customer-action-done', () => { table.ajax.reload(null, false); });
+            $wire.on('customer-online-sync-complete', () => { table.ajax.reload(null, true); });
     </script>
 @endscript
