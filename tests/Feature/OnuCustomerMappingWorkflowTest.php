@@ -253,7 +253,7 @@ class OnuCustomerMappingWorkflowTest extends TestCase
 
         $this->saveMapping($olt, $third, 'ONU-52', 'aa-bb-cc-dd-51-51', ['confirm_overwrite' => 1])
             ->assertSessionHas('onu_sync_success', false)
-            ->assertSessionHas('inventory_message', 'The requested ONU ID already belongs to another ONU on this PON. Refresh the ONU list and select the correct device.');
+            ->assertSessionHas('inventory_message', 'The requested ONU ID already belongs to another ONU on this OLT. Refresh the ONU list and select the correct device.');
 
         $this->assertDatabaseHas('olt_onu_customer_mappings', [
             'olt_device_id' => $olt->id,

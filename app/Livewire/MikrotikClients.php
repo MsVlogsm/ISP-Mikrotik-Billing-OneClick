@@ -41,14 +41,30 @@ class MikrotikClients extends Component
                     ->whereColumn('router_lists.router_name', 'p_p_p_secrets.router_name')
                     ->where('router_lists.action', 'connected');
             })
+            ->where(function ($q) {
+                // Keep legacy NULL statuses, but omit profiles sourced only from removed secrets.
+                $q->whereNull('status')->orWhere('status', '!=', 'removed');
+            })
             ->when($this->router, fn ($q) => $q->where('router_name', $this->router))
             ->whereNotNull('profile')->where('profile', '!=', '')->distinct()->orderBy('profile')->pluck('profile');
 
-        $clients = PPPSecrets::query()->with('customer')
-            // Manual Client List export: once a PPP secret is exported and linked,
-            // remove it from this pending MikroTik import/sync list. Never delete the PPP secret.
+        $clients = $this->pendingClientsQuery()->paginate($this->perPage);
+
+        return view('livewire.mikrotik-clients', compact('routers', 'profiles', 'clients'))->layout('layouts.app');
+    }
+
+    /**
+     * Current, unlinked PPP secrets eligible for manual Customer List import.
+     * The last successful RouterOS sync marks absent local records as removed;
+     * keep those historical rows for retention, but never show them as pending.
+     */
+    protected function pendingClientsQuery()
+    {
+        return PPPSecrets::query()->with('customer')
             ->whereDoesntHave('customer')
-            // Hard gate: local PPP records are importable only while their router is connected.
+            ->where(function ($q) {
+                $q->whereNull('status')->orWhere('status', '!=', 'removed');
+            })
             ->whereExists(function ($q) {
                 $q->selectRaw('1')
                     ->from('router_lists')
@@ -67,9 +83,7 @@ class MikrotikClients extends Component
                     $q->where('username', 'like', $s)->orWhere('caller_id', 'like', $s)->orWhere('router_name', 'like', $s);
                 });
             })
-            ->orderBy('username')->paginate($this->perPage);
-
-        return view('livewire.mikrotik-clients', compact('routers', 'profiles', 'clients'))->layout('layouts.app');
+            ->orderBy('username');
     }
 
     public function updated($property): void
@@ -96,6 +110,10 @@ class MikrotikClients extends Component
     {
         abort_unless(hasAccess(['Super Admin'], ['enable-pending-customer']), 403);
         $secret = PPPSecrets::findOrFail($id);
+        if (strtolower(trim((string) $secret->status)) === 'removed') {
+            flash()->warning("{$secret->username} is no longer present on RouterOS after the latest sync.");
+            return;
+        }
         $router = RouterList::where('router_name', $secret->router_name)->first();
         if (! $router || $router->action !== 'connected') {
             flash()->warning("Router {$secret->router_name} is disabled/disconnected. Network action blocked.");
@@ -125,6 +143,10 @@ class MikrotikClients extends Component
 
         if ($id !== null) {
             $secret = PPPSecrets::with('customer')->findOrFail($id);
+            if (strtolower(trim((string) $secret->status)) === 'removed') {
+                flash()->warning("{$secret->username} is no longer present on RouterOS after the latest sync.");
+                return;
+            }
             $router = RouterList::where('router_name', $secret->router_name)->first();
             if (! $router || $router->action !== 'connected') {
                 flash()->warning("Router {$secret->router_name} is disabled/disconnected. Import is unavailable.");
@@ -179,6 +201,10 @@ class MikrotikClients extends Component
                     ->from('router_lists')
                     ->whereColumn('router_lists.router_name', 'p_p_p_secrets.router_name')
                     ->where('router_lists.action', 'connected');
+            })
+            ->where(function ($q) {
+                // Excel/CSV and bulk Client List actions must not export stale removed rows.
+                $q->whereNull('status')->orWhere('status', '!=', 'removed');
             })
             ->when($this->router, fn ($q) => $q->where('router_name', $this->router))
             ->when($this->protocol, fn ($q) => $q->whereRaw('upper(service) = ?', [strtoupper($this->protocol)]))

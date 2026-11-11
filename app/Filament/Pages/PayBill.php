@@ -61,15 +61,36 @@ class PayBill extends Page
         $this->amount = $due > 0 ? $due : (float) $this->billing->monthly_rent;
 
         // Set default payment method based on what's active
-        if (siteUrlSettings('payment_bkash_enabled')) {
-            $this->paymentMethod = 'bkash';
-        } elseif (siteUrlSettings('payment_nagad_enabled')) {
-            $this->paymentMethod = 'nagad';
-        } elseif (siteUrlSettings('payment_sslcommerz_enabled')) {
-            $this->paymentMethod = 'sslcommerz';
+        foreach (['bkash', 'nagad', 'sslcommerz'] as $gateway) {
+            if ($this->isGatewayAvailable($gateway)) {
+                $this->paymentMethod = $gateway;
+                break;
+            }
         }
 
         $this->connectionStatus = 'checking...';
+    }
+
+    public function isGatewayAvailable(string $gateway): bool
+    {
+        if (! (bool) siteUrlSettings('payment_'.$gateway.'_enabled')) {
+            return false;
+        }
+
+        return match ($gateway) {
+            'bkash' => str_starts_with((string) siteUrlSettings('payment_bkash_base_url'), 'https://')
+                && filled(siteUrlSettings('payment_bkash_username'))
+                && filled(siteUrlSettings('payment_bkash_password'))
+                && filled(siteUrlSettings('payment_bkash_app_key'))
+                && filled(siteUrlSettings('payment_bkash_app_secret')),
+            'nagad' => str_starts_with((string) siteUrlSettings('payment_nagad_base_url'), 'https://')
+                && filled(siteUrlSettings('payment_nagad_merchant_id'))
+                && filled(siteUrlSettings('payment_nagad_public_key'))
+                && filled(siteUrlSettings('payment_nagad_private_key')),
+            'sslcommerz' => filled(siteUrlSettings('payment_sslcommerz_store_id'))
+                && filled(siteUrlSettings('payment_sslcommerz_store_password')),
+            default => false,
+        };
     }
 
     public function checkLiveStatus()
@@ -120,6 +141,11 @@ class PayBill extends Page
             'amount' => 'required|numeric|min:1',
             'paymentMethod' => 'required|in:bkash,nagad,sslcommerz',
         ]);
+
+        if (! $this->isGatewayAvailable($this->paymentMethod)) {
+            return redirect()->route('filament.portal.pages.pay-bill')
+                ->with('error', 'The selected payment gateway is disabled or its credentials are incomplete.');
+        }
 
         $routeParams = ['amount' => $this->amount];
 

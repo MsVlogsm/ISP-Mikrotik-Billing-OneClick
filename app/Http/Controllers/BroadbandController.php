@@ -61,6 +61,13 @@ class BroadbandController extends Controller
     public function list(Request $request)
     {
         $status = $request->status;
+
+        // Disabled Customers must use the exact same Livewire page, table,
+        // actions and filtering behavior as the primary Customer List.
+        if ($status === 'disabled') {
+            return redirect()->route('customers.index', ['dashboard_status' => 'disable']);
+        }
+
         $query = $this->baseQuery($request);
         $leftStats = null;
 

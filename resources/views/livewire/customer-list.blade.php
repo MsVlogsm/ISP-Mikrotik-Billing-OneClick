@@ -9,7 +9,7 @@
         <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
             <div>
                 <div class="customer-eyebrow"><i class="bi bi-people-fill me-1"></i>{{ __('CUSTOMER MANAGEMENT') }}</div>
-                <h1 class="customer-page-title">{{ __('Customer List') }}</h1>
+                <h1 class="customer-page-title">{{ request('dashboard_status') === 'disable' ? __('Disabled Customers') : __('Customer List') }}</h1>
                 <p class="customer-page-subtitle mb-0">{{ __('Manage customer profiles, connectivity, billing and service actions from one place.') }}</p>
             </div>
             <div class="customer-header-actions d-flex flex-wrap gap-2">
@@ -55,7 +55,7 @@
                                 <i class="bi bi-people-fill me-1"></i> {{ __('All Customers') }} <span class="badge bg-white text-primary fw-bold"></span>
                             </label>
                             
-                            <input type="radio" class="btn-check" name="collection" id="all_active_list" autocomplete="off" checked>
+                            <input type="radio" class="btn-check" name="collection" id="all_active_list" autocomplete="off" @checked(request('dashboard_status') !== 'disable')>
                             <label class="btn btn-outline-primary btn-sm rounded-pill px-3 shadow-none fw-600" for="all_active_list">
                                 <i class="bi bi-people-fill me-1"></i> {{ __('All Active') }} <span class="badge bg-white text-primary fw-bold"></span>
                             </label>
@@ -75,7 +75,7 @@
                                 <i class="bi bi-clock-history me-1"></i> {{ __('Pending') }} <span class="badge bg-white text-warning fw-bold"></span>
                             </label>
 
-                            <input type="radio" class="btn-check" name="collection" id="disable_customer" autocomplete="off">
+                            <input type="radio" class="btn-check" name="collection" id="disable_customer" autocomplete="off" @checked(request('dashboard_status') === 'disable')>
                             <label class="btn btn-outline-danger btn-sm rounded-pill px-3 shadow-none fw-600" for="disable_customer">
                                 <i class="bi bi-slash-circle me-1"></i> {{ __('Disabled') }} <span class="badge bg-white text-danger fw-bold"></span>
                             </label>
@@ -977,10 +977,6 @@
                         }else if (checkedId && checkedId.startsWith('reseller_')) {
                             d.filter = 'reseller';
                             d.reseller_id = checkedRadio.data('reseller-id');
-                        }
-                        const dashboardStatus = new URLSearchParams(window.location.search).get('dashboard_status');
-                        if (dashboardStatus && ['all','active','pending','free','disable','inactive','recent'].includes(dashboardStatus)) {
-                            d.filter = dashboardStatus === 'active' ? 'all_active' : dashboardStatus;
                         }
                         if (new URLSearchParams(window.location.search).get('map_missing') === '1') {
                             d.filter = 'missing_location';

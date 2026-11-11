@@ -37,6 +37,11 @@ class SslCommerzPaymentController extends Controller
 
     public function initiate(Request $request)
     {
+        if (! (bool) siteUrlSettings('payment_sslcommerz_enabled')) {
+            return redirect()->route('filament.portal.pages.pay-bill')
+                ->with('error', 'sslcommerz payments are currently unavailable.');
+        }
+
         $request->validate([
             'amount' => 'required|numeric|min:1',
         ]);
@@ -197,6 +202,16 @@ class SslCommerzPaymentController extends Controller
                 ->first();
         }
 
+        if (! $attempt) {
+            Log::warning('SSLCommerz callback rejected because no local payment attempt matched.', [
+                'merchant_reference_present' => $tranId !== '',
+                'validation_reference_present' => $valId !== '',
+            ]);
+
+            return redirect()->route('filament.portal.pages.pay-bill')
+                ->with('error', 'Payment verification request was invalid. No matching checkout was found.');
+        }
+
         if (in_array($status, ['VALID', 'VALIDATED', 'SUCCESS'], true) && $valId !== '') {
             try {
                 $config = $this->getSslConfig();
@@ -217,12 +232,10 @@ class SslCommerzPaymentController extends Controller
                 $verifiedTranId = trim((string) ($res['tran_id'] ?? ''));
                 $verifiedAmount = is_numeric($res['amount'] ?? null) ? (float) $res['amount'] : 0.0;
                 $verifiedCurrency = strtoupper((string) ($res['currency'] ?? $res['currency_type'] ?? ''));
-                $attemptMatches = ! $attempt || (
-                    $verifiedTranId !== ''
+                $attemptMatches = $verifiedTranId !== ''
                     && hash_equals((string) $attempt->merchant_reference, $verifiedTranId)
                     && abs($verifiedAmount - (float) $attempt->amount) <= 0.009
-                    && $verifiedCurrency === 'BDT'
-                );
+                    && $verifiedCurrency === 'BDT';
                 $riskRequiresReview = (string) ($res['risk_level'] ?? '0') === '1';
 
                 if (in_array($validationStatus, ['VALID', 'VALIDATED'], true)
@@ -231,21 +244,15 @@ class SslCommerzPaymentController extends Controller
                     $amount = $verifiedAmount;
                     $trxID = trim((string) ($res['bank_trx_id'] ?? $res['bank_tran_id'] ?? $verifiedTranId));
 
-                    $customer = $attempt
-                        ? CustomersInfo::where('customer_unique_id', $attempt->customer_unique_id)->first()
-                        : (auth()->user() ? auth()->user()->customer : null);
-
-                    if (! $customer && session()->has('ssl_customer_id')) {
-                        $customer = CustomersInfo::find(session('ssl_customer_id'));
-                    }
+                    $customer = CustomersInfo::where('customer_unique_id', $attempt->customer_unique_id)->first();
 
                     if ($customer && $amount > 0 && $trxID !== '') {
-                        $metadata = $attempt ? [
+                        $metadata = [
                             'source' => 'sslcommerz_callback',
                             'payment_attempt_id' => $attempt->id,
                             'external_invoice_id' => $attempt->merchant_reference,
                             'verified_gateway_callback' => true,
-                        ] : [];
+                        ];
                         $this->paymentService->processSuccessPayment($customer, $amount, 'sslcommerz', $trxID, $metadata);
 
                         return redirect()->route('filament.portal.pages.dashboard')

@@ -155,9 +155,9 @@ class CustomerList extends Component
 
         $customerStats = [
             'total' => CustomersInfo::count(),
-            'active' => CustomersInfo::whereNotIn('status', ['pending', 'disable', 'free', 'inactive'])->count(),
+            'active' => CustomersInfo::whereNotIn('status', ['pending', 'disable', 'temporary_disable', 'free', 'inactive'])->count(),
             'pending' => CustomersInfo::where('status', 'pending')->count(),
-            'disabled' => CustomersInfo::where('status', 'disable')->count(),
+            'disabled' => CustomersInfo::whereIn('status', ['disable', 'temporary_disable'])->count(),
             'free' => CustomersInfo::where('status', 'free')->count(),
         ];
 
@@ -170,7 +170,7 @@ class CustomerList extends Component
             abort(403, 'Unauthorized action.');
         }
 
-        $statusFilter = ['pending', 'disable', 'free', 'inactive'];
+        $statusFilter = ['pending', 'disable', 'temporary_disable', 'free', 'inactive'];
 
         $data = CustomersInfo::query()
             ->with(['billing', 'pppUser', 'customerAddress', 'official', 'package', 'reseller', 'latestOnuOpticalReading.onuMapping.olt'])
@@ -256,8 +256,11 @@ class CustomerList extends Component
                 }
                 break;
 
-            case 'pending':
             case 'disable':
+                $data->whereIn('status', ['disable', 'temporary_disable']);
+                break;
+
+            case 'pending':
             case 'free':
             case 'inactive':
                 $data->where('status', $request->filter);

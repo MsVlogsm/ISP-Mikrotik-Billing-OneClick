@@ -153,7 +153,7 @@ class MainSiteSetup extends Component implements HasActions, HasForms
                 && str_starts_with((string) MainSiteData::getValue('payment_bkash_base_url', ''), 'https://'),
 
             'payment_nagad_enabled' => MainSiteData::getValue('payment_nagad_enabled', 0) ? 1 : 0,
-            'payment_nagad_base_url' => MainSiteData::getValue('payment_nagad_base_url', 'http://sandbox.nagad.com.bd:10080/remote-payment-gateway-1.0/api/dfs'),
+            'payment_nagad_base_url' => MainSiteData::getValue('payment_nagad_base_url', ''),
             'payment_nagad_merchant_id' => null,
             'payment_nagad_public_key' => null,
             'payment_nagad_private_key' => null,

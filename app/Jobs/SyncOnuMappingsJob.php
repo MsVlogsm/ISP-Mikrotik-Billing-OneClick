@@ -19,9 +19,9 @@ class SyncOnuMappingsJob implements ShouldQueue, ShouldBeUnique
     use Queueable;
     use SerializesModels;
 
-    public int $tries = 2;
-    public int $timeout = 120;
-    public int $uniqueFor = 300;
+    public int $tries = 10;
+    public int $timeout = 180;
+    public int $uniqueFor = 900;
 
     public function uniqueId(): string
     {
@@ -43,6 +43,21 @@ class SyncOnuMappingsJob implements ShouldQueue, ShouldBeUnique
                     throw new RuntimeException(
                         'Event-driven ONU mapping sync failed with exit code '.$exitCode.': '.mb_substr($output, 0, 2500)
                     );
+                }
+
+                if (str_contains($output, 'ONU/customer sync is already running; this duplicate trigger was coalesced.')) {
+                    // The scheduled/manual sync owns the shared flock. Keep this
+                    // unique queue request alive and retry after that run releases it.
+                    $this->release(30);
+
+                    return [
+                        'message' => 'Another OLT/ONU sync is already running; this queued request will retry in 30 seconds.',
+                        'metadata' => [
+                            'trigger' => 'customer_or_pppoe_identity_change',
+                            'coalesced' => true,
+                            'retry_after_seconds' => 30,
+                        ],
+                    ];
                 }
 
                 return [

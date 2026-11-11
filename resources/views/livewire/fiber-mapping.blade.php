@@ -5,15 +5,74 @@
     </div>
     @if($message)<div class="alert alert-info py-2">{{ $message }}</div>@endif
     <div class="alert alert-warning py-2 small">All new records start as <strong>Pending</strong>. Verification is an explicit operator action. A trace with any missing or unverified segment remains <strong>Incomplete</strong>.</div>
-    <div class="d-flex flex-wrap gap-2 mb-3">
-        @foreach(['cables'=>'Fiber Cable Register','olt'=>'OLT & PON','closures'=>'Splice Closures','splices'=>'Splice & Core','splitters'=>'Splitters','ports'=>'Splitter Ports','locations'=>'Customer GPS','customers'=>'ONU → Customer','trace'=>'Fiber Trace','audit'=>'Audit Log'] as $key=>$label)
-            <button type="button" wire:click="$set('tab','{{ $key }}')" class="btn btn-sm {{ $tab===$key?'btn-primary':'btn-outline-secondary' }}">{{ $label }}</button>
-        @endforeach
+    <style>
+        .fm-stage{height:100%;border:1px solid #e2e8f0;border-radius:12px;padding:12px;background:#fff}
+        .fm-stage-title{font-size:.7rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#64748b;margin-bottom:9px}
+        .fm-stage .btn{margin:0 5px 5px 0}
+        .fm-current-step{border-left:4px solid #2563eb;background:#eff6ff;border-radius:8px;padding:11px 14px;font-size:.86rem}
+        .fm-current-step strong{display:block;color:#1e3a8a;margin-bottom:2px}
+        @media(max-width:575.98px){.fm-stage .btn{width:100%;text-align:left}}
+    </style>
+    <div class="row g-2 mb-3" aria-label="Fiber mapping workflow">
+        <div class="col-12 col-xl-6">
+            <div class="fm-stage">
+                <div class="fm-stage-title">01 · Build the physical plant</div>
+                @foreach(['cables'=>'1. Cable register','olt'=>'2. OLT / PON','closures'=>'3. Splice closures','splices'=>'4. Core splices','splitters'=>'5. Splitters','ports'=>'6. Splitter ports'] as $key=>$label)
+                    <button type="button" wire:click="$set('tab','{{ $key }}')" aria-pressed="{{ $tab===$key?'true':'false' }}" class="btn btn-sm {{ $tab===$key?'btn-primary':'btn-outline-secondary' }}">{{ $label }}</button>
+                @endforeach
+            </div>
+        </div>
+        <div class="col-12 col-xl-4">
+            <div class="fm-stage">
+                <div class="fm-stage-title">02 · Link the customer</div>
+                @foreach(['locations'=>'7. Customer GPS','customers'=>'8. ONU → Customer'] as $key=>$label)
+                    <button type="button" wire:click="$set('tab','{{ $key }}')" aria-pressed="{{ $tab===$key?'true':'false' }}" class="btn btn-sm {{ $tab===$key?'btn-primary':'btn-outline-secondary' }}">{{ $label }}</button>
+                @endforeach
+            </div>
+        </div>
+        <div class="col-12 col-xl-2">
+            <div class="fm-stage">
+                <div class="fm-stage-title">03 · Validate</div>
+                @foreach(['trace'=>'9. Trace path','audit'=>'10. Audit log'] as $key=>$label)
+                    <button type="button" wire:click="$set('tab','{{ $key }}')" aria-pressed="{{ $tab===$key?'true':'false' }}" class="btn btn-sm {{ $tab===$key?'btn-primary':'btn-outline-secondary' }}">{{ $label }}</button>
+                @endforeach
+            </div>
+        </div>
+    </div>
+    @php
+        $fiberStepTitles = [
+            'cables' => 'Step 1 · Register the actual cable',
+            'olt' => 'Step 2 · Record the OLT / PON uplink',
+            'closures' => 'Step 3 · Register the physical splice closure',
+            'splices' => 'Step 4 · Join the exact source and target cores',
+            'splitters' => 'Step 5 · Record the installed splitter and input core',
+            'ports' => 'Step 6 · Record each real splitter output port',
+            'locations' => 'Step 7 · Save the customer GPS location',
+            'customers' => 'Step 8 · Assign the exact ONU identity to a customer',
+            'trace' => 'Step 9 · Trace the complete customer-to-OLT route',
+            'audit' => 'Step 10 · Review operator changes',
+        ];
+        $fiberStepHints = [
+            'cables' => 'Use the actual cable ID, route, core count and manufacturer colour chart from field records.',
+            'olt' => 'Select the OLT and exact slot/port, then associate its uplink with a registered cable.',
+            'closures' => 'Record the closure ID, location, GPS and tray reference before creating core splices.',
+            'splices' => 'Connect the real source cable/core to the real target cable/core inside the selected closure.',
+            'splitters' => 'Record the installed splitter ratio and its actual input cable/core.',
+            'ports' => 'Assign each output port explicitly and record its outgoing cable/core or downstream splitter.',
+            'locations' => 'Save surveyed customer coordinates and verify the location before final mapping.',
+            'customers' => 'Select the exact ONU ledger identity or enter its real MAC/serial; no automatic matching is performed.',
+            'trace' => 'A trace is complete only when every physical cable, core, splice, splitter port and mapping is verified.',
+            'audit' => 'Review who created or verified each physical mapping record.',
+        ];
+    @endphp
+    <div class="fm-current-step mb-3" role="status">
+        <strong>{{ $fiberStepTitles[$tab] ?? 'Fiber mapping workflow' }}</strong>
+        {{ $fiberStepHints[$tab] ?? 'Select a workflow step above.' }}
     </div>
     @if($tab==='cables')
         <div class="card mb-3"><div class="card-header fw-bold">Register physical fiber cable</div><div class="card-body"><form wire:submit="saveCable" class="row g-3">
             @foreach(['cable_id'=>'Cable ID','route_name'=>'Route Name','start_location'=>'Start Location','end_location'=>'End Location','start_latitude'=>'Start Latitude','start_longitude'=>'Start Longitude','end_latitude'=>'End Latitude','end_longitude'=>'End Longitude','length_m'=>'Length (m)','manufacturer'=>'Manufacturer'] as $field=>$label)<div class="col-md-3"><label class="form-label">{{ $label }}</label><input wire:model="{{ $field }}" class="form-control">@error($field)<small class="text-danger">{{ $message }}</small>@enderror</div>@endforeach
-            <div class="col-md-3"><label class="form-label">Core Count</label><select wire:model="core_count" class="form-select"><option value="">Select actual count</option>@foreach([4,6,12,24,48,96,144] as $n)<option value="{{ $n }}">{{ $n }} Core</option>@endforeach</select>@error('core_count')<small class="text-danger">{{ $message }}</small>@enderror</div>
+            <div class="col-md-3"><label class="form-label">Core Count</label><select wire:model="core_count" class="form-select"><option value="">Select actual count</option>@foreach([2,4,6,12,24,48,96,144] as $n)<option value="{{ $n }}">{{ $n }} Core</option>@endforeach</select>@error('core_count')<small class="text-danger">{{ $message }}</small>@enderror</div>
             <div class="col-md-3"><label class="form-label">Manufacturer Colour Standard</label><input wire:model="color_standard" class="form-control" placeholder="TIA-598 / actual manufacturer code"></div><div class="col-md-3"><label class="form-label">Installation Date</label><input type="date" wire:model="installed_at" class="form-control"></div>
             <div class="col-12"><button class="btn btn-primary">Save Cable</button></div></form></div></div>
         <div class="card mb-3"><div class="card-header fw-bold">CSV Import — Cable Register</div><div class="card-body"><form wire:submit="importCablesCsv" class="d-flex flex-wrap gap-2"><input type="file" wire:model="csvFile" accept=".csv,.txt" class="form-control" style="max-width:420px"><button class="btn btn-outline-primary">Import CSV</button>@error('csvFile')<small class="text-danger">{{ $message }}</small>@enderror</form><small class="text-muted">Required headers: cable_id, route_name, core_count, color_standard. Optional: start_location, end_location, length_m, installed_at. Imported records remain Pending.</small></div></div>

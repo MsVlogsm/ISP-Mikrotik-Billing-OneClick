@@ -36,11 +36,25 @@ class BkashPaymentController extends Controller
         $config = $this->getBkashConfig();
         $apiType = siteUrlSettings('payment_bkash_api_type') ?: 'tokenized';
 
-        $tokenUrl = ($apiType === 'tokenized') 
-            ? $config['base_url'].'/tokenized/checkout/token/grant'
-            : $config['base_url'].'/checkout/token/grant';
+        $baseUrl = rtrim((string) ($config['base_url'] ?? ''), '/');
+        if (! str_starts_with($baseUrl, 'https://')
+            || blank($config['username'])
+            || blank($config['password'])
+            || blank($config['app_key'])
+            || blank($config['app_secret'])) {
+            throw new \RuntimeException('bKash credentials or HTTPS endpoint are incomplete.');
+        }
 
-        $response = Http::withBasicAuth($config['username'], $config['password'])
+        $tokenUrl = ($apiType === 'tokenized')
+            ? $baseUrl.'/tokenized/checkout/token/grant'
+            : $baseUrl.'/checkout/token/grant';
+
+        $response = Http::connectTimeout(5)->timeout(15)->retry(1, 250)
+            ->acceptJson()
+            ->withHeaders([
+                'username' => $config['username'],
+                'password' => $config['password'],
+            ])
             ->post($tokenUrl, [
                 'app_key' => $config['app_key'],
                 'app_secret' => $config['app_secret'],
@@ -48,9 +62,12 @@ class BkashPaymentController extends Controller
 
         $body = $response->json();
 
-        if (! isset($body['id_token'])) {
-            Log::error('bKash token generation failed: '.json_encode($body));
-            throw new \Exception('bKash gateway authentication failed.');
+        if (! $response->successful() || ! is_array($body) || blank($body['id_token'] ?? null)) {
+            Log::warning('bKash token grant rejected.', [
+                'http_status' => $response->status(),
+                'provider_status' => is_array($body) ? ($body['statusCode'] ?? null) : null,
+            ]);
+            throw new \RuntimeException('bKash gateway authentication failed.');
         }
 
         return $body['id_token'];
@@ -58,6 +75,11 @@ class BkashPaymentController extends Controller
 
     public function initiate(Request $request)
     {
+        if (! (bool) siteUrlSettings('payment_bkash_enabled')) {
+            return redirect()->route('filament.portal.pages.pay-bill')
+                ->with('error', 'bkash payments are currently unavailable.');
+        }
+
         $request->validate([
             'amount' => 'required|numeric|min:1',
         ]);
@@ -77,6 +99,16 @@ class BkashPaymentController extends Controller
 
         if ($isLocal && $request->has('mock')) {
             return $this->showMockPaymentPage('bKash', $customer, $amount);
+        }
+
+        $config = $this->getBkashConfig();
+        if (! str_starts_with((string) $config['base_url'], 'https://')
+            || blank($config['username'])
+            || blank($config['password'])
+            || blank($config['app_key'])
+            || blank($config['app_secret'])) {
+            return redirect()->route('filament.portal.pages.pay-bill')
+                ->with('error', 'bKash is not properly configured (credentials or HTTPS endpoint are missing).');
         }
 
         $merchantInvoiceNumber = 'XLK'.Str::upper(Str::random(16));
@@ -197,6 +229,15 @@ class BkashPaymentController extends Controller
                 ->first();
         }
 
+        if (! $attempt) {
+            Log::warning('bKash callback rejected because no local payment attempt matched.', [
+                'payment_reference_present' => $paymentID !== '',
+            ]);
+
+            return redirect()->route('filament.portal.pages.pay-bill')
+                ->with('error', 'Payment verification request was invalid. No matching checkout was found.');
+        }
+
         if ($status === 'success' && $paymentID !== '') {
             try {
                 $idToken = $this->generateToken();
@@ -222,38 +263,27 @@ class BkashPaymentController extends Controller
                     $trxID = trim((string) ($res['trxID'] ?? ''));
                     $amount = is_numeric($res['amount'] ?? null) ? (float) $res['amount'] : 0.0;
 
-                    $customer = $attempt
-                        ? CustomersInfo::where('customer_unique_id', $attempt->customer_unique_id)->first()
-                        : null;
+                    $customer = CustomersInfo::where('customer_unique_id', $attempt->customer_unique_id)->first();
 
                     $customerUniqueId = (string) ($res['payerReference'] ?? '');
-                    if (! $customer && $customerUniqueId !== '') {
-                        $customer = CustomersInfo::where('customer_unique_id', $customerUniqueId)->first();
-                    }
-
-                    if (! $customer && session('bkash_customer_id')) {
-                        $customer = CustomersInfo::find(session('bkash_customer_id'));
-                    }
-
                     $responseInvoice = (string) ($res['merchantInvoiceNumber'] ?? $res['merchantInvoice'] ?? '');
-                    $responseCurrency = strtoupper((string) ($res['currency'] ?? 'BDT'));
-                    $attemptMatches = ! $attempt || (
-                        abs($amount - (float) $attempt->amount) <= 0.009
+                    $responseCurrency = strtoupper((string) ($res['currency'] ?? ''));
+                    $attemptMatches = abs($amount - (float) $attempt->amount) <= 0.009
                         && $customerUniqueId !== ''
                         && hash_equals((string) $attempt->customer_unique_id, $customerUniqueId)
                         && $responseInvoice !== ''
                         && hash_equals((string) $attempt->merchant_reference, $responseInvoice)
                         && $responseCurrency === 'BDT'
-                        && ($attempt->provider_reference === null || hash_equals((string) $attempt->provider_reference, $paymentID))
-                    );
+                        && $attempt->provider_reference !== null
+                        && hash_equals((string) $attempt->provider_reference, $paymentID);
 
                     if ($customer && $attemptMatches && $trxID !== '' && $amount > 0) {
-                        $metadata = $attempt ? [
+                        $metadata = [
                             'source' => 'bkash_callback',
                             'payment_attempt_id' => $attempt->id,
                             'external_invoice_id' => $attempt->merchant_reference,
                             'verified_gateway_callback' => true,
-                        ] : [];
+                        ];
                         $processed = $this->paymentService->processSuccessPayment($customer, $amount, 'bkash', $trxID, $metadata);
 
                         if (! $processed) {
@@ -307,10 +337,15 @@ class BkashPaymentController extends Controller
 
     public function mockSubmit(Request $request)
     {
+        $host = strtolower($request->getHost());
+        $isLocalHost = $host === 'localhost' || $host === '127.0.0.1'
+            || str_ends_with($host, '.test') || str_ends_with($host, '.local');
+        abort_unless(app()->environment(['local', 'testing']) && $isLocalHost, 404);
+
         $request->validate([
             'customer_id' => 'required|exists:customers_infos,id',
             'amount' => 'required|numeric|min:1',
-            'gateway' => 'required',
+            'gateway' => 'required|in:bkash,nagad,sslcommerz',
         ]);
 
         $customer = CustomersInfo::find($request->customer_id);

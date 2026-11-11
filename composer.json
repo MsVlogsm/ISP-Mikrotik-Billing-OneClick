@@ -43,6 +43,7 @@
         "barryvdh/laravel-debugbar": "^4.0",
         "fakerphp/faker": "^1.24",
         "laravel-lang/common": "^6.8",
+        "laravel/boost": "^2.10",
         "laravel/pail": "^1.2",
         "laravel/pint": "^1.29",
         "mockery/mockery": "^1.6",

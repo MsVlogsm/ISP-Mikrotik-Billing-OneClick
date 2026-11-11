@@ -16,6 +16,7 @@ use App\Http\Controllers\CustomerAdvanceController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\CustomerDetailsController;
 use App\Http\Controllers\ImportController;
+use App\Jobs\SyncOnuMappingsJob;
 use App\Http\Controllers\MainSiteController;
 use App\Http\Controllers\Payment\BkashPaymentController;
 use App\Http\Controllers\Payment\NagadPaymentController;
@@ -565,8 +566,11 @@ Route::middleware([
         })->name('network-inventory.devices.destroy');
 
         Route::post('/network-inventory/olt/sync', function () {
-            \Illuminate\Support\Facades\Artisan::call('olt:sync-onu-mappings');
-            return back()->with('onu_sync_message', trim(\Illuminate\Support\Facades\Artisan::output()) ?: 'ONU mapping synchronization completed.')->with('onu_sync_success', true);
+            SyncOnuMappingsJob::dispatch();
+
+            return back()
+                ->with('onu_sync_message', 'OLT/ONU synchronization has been queued. It will run in the background and retry automatically if another sync is already running.')
+                ->with('onu_sync_success', true);
         })->name('network-inventory.olt.sync');
 
         Route::get('/network-inventory/olt-management', function () {
@@ -759,7 +763,7 @@ Route::middleware([
             if($mapping){
                 $idConflict=(string)$mapping->onu_id!==(string)$data['onu_id'] && \App\Models\OltOnuCustomerMapping::where('olt_device_id',$device->id)->where('onu_id',$data['onu_id'])->where('id','<>',$mapping->id)->exists();
                 if($idConflict) {
-                    return back()->with('inventory_message','The requested ONU ID already belongs to another ONU on this PON. Refresh the ONU list and select the correct device.')
+                    return back()->with('inventory_message','The requested ONU ID already belongs to another ONU on this OLT. Refresh the ONU list and select the correct device.')
                         ->with('onu_sync_success',false);
                 }
                 $mapping->onu_id=$data['onu_id'];

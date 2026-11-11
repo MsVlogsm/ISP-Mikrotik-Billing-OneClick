@@ -430,6 +430,42 @@ class NetworkTopologyTest extends TestCase
         $this->assertSame('verified', DB::table('fiber_splitter_ports')->find($port->id)->status);
     }
 
+    public function test_topology_designer_explains_the_manual_asset_connection_and_verification_workflow(): void
+    {
+        Livewire::test(NetworkTopology::class, ['mode' => 'designer'])
+            ->assertSee('Build a clear, verified network path')
+            ->assertSee('Register real assets')
+            ->assertSee('Connect port to port')
+            ->assertSee('Field-verify the path')
+            ->assertSee('Publish when confirmed')
+            ->assertSee('Physical port pairing');
+    }
+
+    public function test_fiber_mapping_shows_grouped_stages_and_contextual_help(): void
+    {
+        Livewire::test(FiberMapping::class)
+            ->assertSee('Build the physical plant')
+            ->assertSee('Link the customer')
+            ->assertSee('Validate')
+            ->assertSee('Register the actual cable');
+    }
+
+    public function test_fiber_cable_register_accepts_the_two_core_standard(): void
+    {
+        Livewire::test(FiberMapping::class)
+            ->set('cable_id', 'CBL-TWO-CORE-TEST')
+            ->set('route_name', 'Two core drop route')
+            ->set('core_count', '2')
+            ->call('saveCable')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseHas('fiber_cables', [
+            'cable_id' => 'CBL-TWO-CORE-TEST',
+            'core_count' => 2,
+            'status' => 'pending',
+        ]);
+    }
+
     public function test_network_map_uses_saved_admin_default_map_settings(): void
     {
         MainSiteData::setValue('ipilot_gis_default_latitude', '24.9000');
@@ -446,6 +482,10 @@ class NetworkTopologyTest extends TestCase
         $this->assertStringContainsString('map-olt-filter', $html);
         $this->assertStringContainsString('map-pon-filter', $html);
         $this->assertStringContainsString('Mouse wheel to zoom', $html);
+        $this->assertStringContainsString('Physical fiber assets', $html);
+        $this->assertStringContainsString('Ports and core continuity', $html);
+        $this->assertStringContainsString('ONU and customer', $html);
+        $this->assertStringContainsString('Trace and publish', $html);
         $this->assertSame([91.8, 24.9], $mapConfig['center']);
         $this->assertSame(14, $mapConfig['zoom']);
         $this->assertSame('satellite', $mapConfig['basemap']);

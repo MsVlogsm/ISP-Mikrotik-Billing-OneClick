@@ -152,6 +152,13 @@
                     <div class="small text-muted text-xl-end mt-2">Unverified field records are not treated as confirmed physical paths.</div>
                 </div>
             </div>
+            <div class="row g-2 mt-3 network-map-fiber-steps" aria-label="Network and fiber workflow">
+                <div class="col-12 col-md-6 col-xl-3"><div class="border rounded-3 p-3 h-100"><span class="small fw-bold text-primary">01 · REGISTER</span><div class="fw-semibold mt-1">Physical fiber assets</div><div class="small text-muted">Cable IDs, actual core count, OLT/PON uplinks, closures and splitter hardware.</div></div></div>
+                <div class="col-12 col-md-6 col-xl-3"><div class="border rounded-3 p-3 h-100"><span class="small fw-bold text-primary">02 · CONNECT</span><div class="fw-semibold mt-1">Ports and core continuity</div><div class="small text-muted">Record source/target cable cores and splitter input/output ports from field data.</div></div></div>
+                <div class="col-12 col-md-6 col-xl-3"><div class="border rounded-3 p-3 h-100"><span class="small fw-bold text-primary">03 · MAP</span><div class="fw-semibold mt-1">ONU and customer</div><div class="small text-muted">Link a real ONU MAC/serial to the correct splitter output and customer GPS record.</div></div></div>
+                <div class="col-12 col-md-6 col-xl-3"><div class="border rounded-3 p-3 h-100"><span class="small fw-bold text-primary">04 · VERIFY</span><div class="fw-semibold mt-1">Trace and publish</div><div class="small text-muted">Verify each physical record, trace the route, then inspect it in Live Topology.</div></div></div>
+            </div>
+            <div class="small text-muted mt-2">Use Manual Fiber Mapping for exact field records, Topology Designer for the network diagram, and Live Topology / Network Map for inspection. No automatic core, port, GPS or customer matching is assumed.</div>
         </div>
     </section>
 

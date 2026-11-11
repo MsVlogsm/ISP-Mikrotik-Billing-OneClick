@@ -169,11 +169,6 @@
                     role="button">{{ __('Create Customer') }}</a>
             </li>
             <li class="nav-item">
-                <!-- parent pages-->
-                <a wire:navigate.hover wire:current.exact="active" class="nav-link"
-                    href="{{ route('customers.index') }}" role="button">{{ __('Customers') }}</a>
-            </li>
-            <li class="nav-item">
                 <a wire:navigate.hover wire:current="active" class="nav-link" href="{{ route('admin-tickets') }}"
                     role="button">{{ __('Support Tickets') }}</a>
             </li>

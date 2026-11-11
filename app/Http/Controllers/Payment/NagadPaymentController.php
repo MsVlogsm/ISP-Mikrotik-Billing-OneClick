@@ -23,8 +23,8 @@ class NagadPaymentController extends Controller
     private function getNagadConfig()
     {
         return [
-            'base_url' => siteUrlSettings('payment_nagad_base_url') ?: config('services.nagad.base_url') ?: 'http://sandbox.nagad.com.bd:10080/remote-payment-gateway-1.0/api/dfs',
-            'merchant_id' => siteUrlSettings('payment_nagad_merchant_id') ?: config('services.nagad.merchant_id') ?: '683002007104225',
+            'base_url' => rtrim((string) siteUrlSettings('payment_nagad_base_url'), '/'),
+            'merchant_id' => (string) siteUrlSettings('payment_nagad_merchant_id'),
             'public_key' => siteUrlSettings('payment_nagad_public_key'),
             'private_key' => siteUrlSettings('payment_nagad_private_key'),
         ];
@@ -32,6 +32,11 @@ class NagadPaymentController extends Controller
 
     public function initiate(Request $request)
     {
+        if (! (bool) siteUrlSettings('payment_nagad_enabled')) {
+            return redirect()->route('filament.portal.pages.pay-bill')
+                ->with('error', 'nagad payments are currently unavailable.');
+        }
+
         $request->validate([
             'amount' => 'required|numeric|min:1',
         ]);
@@ -61,7 +66,8 @@ class NagadPaymentController extends Controller
         $config = $this->getNagadConfig();
 
         // Production payment credentials must use HTTPS; never send merchant keys over plain HTTP.
-        if (empty($config['private_key']) || empty($config['public_key']) || ! str_starts_with((string) $config['base_url'], 'https://')) {
+        if (empty($config['merchant_id']) || empty($config['private_key']) || empty($config['public_key'])
+            || ! str_starts_with((string) $config['base_url'], 'https://')) {
             if ($isLocal) {
                 return response()->view('payment.mock_checkout', [
                     'gateway' => 'Nagad',
@@ -253,6 +259,16 @@ class NagadPaymentController extends Controller
                 ->first();
         }
 
+        if (! $attempt) {
+            Log::warning('Nagad callback rejected because no local payment attempt matched.', [
+                'payment_reference_present' => $paymentRefId !== '',
+                'merchant_order_present' => filled($orderId),
+            ]);
+
+            return redirect()->route('filament.portal.pages.pay-bill')
+                ->with('error', 'Payment verification request was invalid. No matching checkout was found.');
+        }
+
         if ($status === 'success' && $paymentRefId !== '') {
             try {
                 $config = $this->getNagadConfig();
@@ -275,25 +291,22 @@ class NagadPaymentController extends Controller
                             && strtolower((string) ($decryptedVerifyJson['status'] ?? '')) === 'success') {
                             $amount = is_numeric($decryptedVerifyJson['amount'] ?? null) ? (float) $decryptedVerifyJson['amount'] : 0.0;
                             $responseOrderId = (string) ($decryptedVerifyJson['orderId'] ?? '');
-                            $customer = $attempt
-                                ? CustomersInfo::where('customer_unique_id', $attempt->customer_unique_id)->first()
-                                : (auth()->user() ? auth()->user()->customer : null);
+                            $customer = CustomersInfo::where('customer_unique_id', $attempt->customer_unique_id)->first();
 
-                            $attemptMatches = ! $attempt || (
-                                abs($amount - (float) $attempt->amount) <= 0.009
+                            $attemptMatches = abs($amount - (float) $attempt->amount) <= 0.009
                                 && $responseOrderId !== ''
                                 && hash_equals((string) $attempt->merchant_reference, $responseOrderId)
-                                && ($attempt->provider_reference === null || hash_equals((string) $attempt->provider_reference, $paymentRefId))
-                            );
+                                && $attempt->provider_reference !== null
+                                && hash_equals((string) $attempt->provider_reference, $paymentRefId);
 
                             if ($customer && $attemptMatches && $amount > 0) {
                                 $providerTrxId = (string) ($decryptedVerifyJson['issuerPaymentRefNo'] ?? $paymentRefId);
-                                $metadata = $attempt ? [
+                                $metadata = [
                                     'source' => 'nagad_callback',
                                     'payment_attempt_id' => $attempt->id,
                                     'external_invoice_id' => $attempt->merchant_reference,
                                     'verified_gateway_callback' => true,
-                                ] : [];
+                                ];
                                 $this->paymentService->processSuccessPayment($customer, $amount, 'nagad', $providerTrxId, $metadata);
 
                                 return redirect()->route('filament.portal.pages.dashboard')

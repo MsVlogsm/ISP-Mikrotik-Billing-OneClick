@@ -241,9 +241,9 @@
                     <hr class="cp-my-4 cp-border-gray-100 dark:cp-border-white/5">
 
                     @php
-                        $bkashActive = siteUrlSettings('payment_bkash_enabled');
-                        $nagadActive = siteUrlSettings('payment_nagad_enabled');
-                        $sslActive = siteUrlSettings('payment_sslcommerz_enabled');
+                        $bkashActive = $this->isGatewayAvailable('bkash');
+                        $nagadActive = $this->isGatewayAvailable('nagad');
+                        $sslActive = $this->isGatewayAvailable('sslcommerz');
                     @endphp
 
                     @if(!$bkashActive && !$nagadActive && !$sslActive)

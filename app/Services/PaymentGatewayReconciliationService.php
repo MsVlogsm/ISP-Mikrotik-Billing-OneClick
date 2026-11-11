@@ -122,7 +122,8 @@ class PaymentGatewayReconciliationService
             : '/checkout/token/grant';
 
         $tokenResponse = Http::connectTimeout(5)->timeout(12)->retry(1, 250)
-            ->withBasicAuth($username, $password)
+            ->acceptJson()
+            ->withHeaders(['username' => $username, 'password' => $password])
             ->post($baseUrl.$tokenPath, ['app_key' => $appKey, 'app_secret' => $appSecret]);
 
         $tokenBody = $tokenResponse->json();
@@ -170,8 +171,8 @@ class PaymentGatewayReconciliationService
 
     private function queryNagad(PaymentGatewayAttempt $attempt): array
     {
-        $baseUrl = rtrim((string) (siteUrlSettings('payment_nagad_base_url') ?: config('services.nagad.base_url')), '/');
-        $merchantId = (string) (siteUrlSettings('payment_nagad_merchant_id') ?: config('services.nagad.merchant_id'));
+        $baseUrl = rtrim((string) siteUrlSettings('payment_nagad_base_url'), '/');
+        $merchantId = (string) siteUrlSettings('payment_nagad_merchant_id');
         $privateKey = (string) siteUrlSettings('payment_nagad_private_key');
         $publicKey = (string) siteUrlSettings('payment_nagad_public_key');
 
