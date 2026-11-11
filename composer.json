@@ -22,7 +22,7 @@
         "laravel/pennant": "^1.16",
         "laravel/pulse": "^1.4",
         "laravel/sanctum": "^4.0",
-        "laravel/scout": "^10.14",
+        "laravel/scout": "^11.9",
         "laravel/socialite": "^5.30",
         "laravel/tinker": "^3.0",
         "livewire/blaze": "^1.0",
