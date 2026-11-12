@@ -40,7 +40,10 @@ return [
             'models' => ['V1600D4'],
             'enterprise_oid' => '1.3.6.1.4.1.37950',
             'mib_table_oid' => '1.3.6.1.4.1.37950.1.1.5.12.1.12',
-            'client_mac_discovery' => false,
+            // Enabled after a live read-only dot1dTpFdbTable walk on BT-EPON-OLT
+            // (V1600D4 / V1.0.2R) returned 11 FDB rows, 9 dynamic ONU client MACs.
+            // Ambiguous MACs remain quarantined by the sync/reconciliation services.
+            'client_mac_discovery' => true,
             'system_oids' => [
                 'sysDescr' => '1.3.6.1.2.1.1.1.0',
                 'sysUpTime' => '1.3.6.1.2.1.1.3.0',

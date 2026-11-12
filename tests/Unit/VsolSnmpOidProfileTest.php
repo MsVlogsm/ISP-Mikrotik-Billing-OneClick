@@ -25,7 +25,7 @@ class VsolSnmpOidProfileTest extends TestCase
 
     public function test_live_sysdescr_profile_overrides_a_conflicting_inventory_model(): void
     {
-        $adapter = new VsolSnmpReadOnlyAdapter();
+        $adapter = new VsolSnmpReadOnlyAdapter;
         $device = new NetworkInventoryDevice([
             'type' => 'olt',
             'vendor' => 'VSOL',
@@ -52,13 +52,13 @@ class VsolSnmpOidProfileTest extends TestCase
         $this->assertSame('1.3.6.1.4.1.37950.1.1.5.12.1.12.1.6', $profile['onu_oids']['onu_mac']);
         $this->assertSame('1.3.6.1.4.1.37950.1.1.5.12.2.1.8.1.6', $profile['opm_oids']['tx_power']);
         $this->assertSame('1.3.6.1.4.1.37950.1.1.5.12.2.1.8.1.7', $profile['opm_oids']['rx_power']);
-        $this->assertFalse($profile['client_mac_discovery']);
+        $this->assertTrue($profile['client_mac_discovery']);
         $this->assertContains('V1600D4', $profile['models']);
     }
 
     public function test_vsol_read_only_adapter_supports_vsol_olt_without_any_write_surface(): void
     {
-        $adapter = new VsolSnmpReadOnlyAdapter();
+        $adapter = new VsolSnmpReadOnlyAdapter;
         $device = new NetworkInventoryDevice([
             'type' => 'olt',
             'vendor' => 'VSOL',
@@ -72,7 +72,7 @@ class VsolSnmpOidProfileTest extends TestCase
 
     public function test_opm_rows_use_composite_pon_onu_index_not_legacy_row_ordinal(): void
     {
-        $adapter = new VsolSnmpReadOnlyAdapter();
+        $adapter = new VsolSnmpReadOnlyAdapter;
         $method = new \ReflectionMethod(VsolSnmpReadOnlyAdapter::class, 'opmIndexForOnu');
         $method->setAccessible(true);
 

@@ -7,16 +7,22 @@ use App\Models\CustomersInfo;
 use App\Models\NetworkInventoryDevice;
 use App\Models\OltOnuCustomerMapping;
 use App\Models\OltOnuCustomerPppLink;
+use App\Models\OnuMacLedger;
 use App\Models\PPPSecrets;
 use App\Models\RouterList;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 class CustomerOnuRealtimeSyncService
 {
+    private const LIVE_IDENTITY_SNAPSHOT_TTL_SECONDS = 300;
+
+    /** @var array<int, array{captured_at: Carbon, onus: array<int, array>}> */
+    private array $liveIdentitySnapshots = [];
+
     public function __construct(
         private readonly OltReadOnlyAdapterManager $adapterManager,
-        private readonly VsolCliProvisioningService $vsolCli,
         private readonly VsolSshOpmCollector $vsolOpmCollector,
         private readonly MikrotikController $mikrotik,
     ) {}
@@ -80,167 +86,114 @@ class CustomerOnuRealtimeSyncService
             throw new RuntimeException('PPPoE session/secret থেকে client MAC পাওয়া যায়নি; exact ONU identity ছাড়া sync করা নিরাপদ নয়।');
         }
 
-        // Fast path: when this customer's saved PPPoE MAC still matches the live
-        // RouterOS caller-id, reuse the previously verified ONU identity and poll
-        // only that OLT inventory. No full MAC/OPM sweep is needed for this row.
-        $knownMappings = collect();
-        $sharedLinks = OltOnuCustomerPppLink::query()
-            ->with('onuMapping.olt')
-            ->where('customer_id', $customer->id)
-            ->where('ppp_user_id', $ppp->id)
-            ->where('status', 'active')
-            ->get();
-
-        foreach ($sharedLinks as $link) {
-            if ($this->normalizeMac($link->client_mac) === $callerMac && $link->onuMapping) {
-                $knownMappings->push($link->onuMapping);
-            }
-        }
-
-        if ($this->normalizeMac($ppp->last_caller_id) === $callerMac) {
-            OltOnuCustomerMapping::query()
-                ->with('olt')
-                ->where('customer_id', $customer->id)
-                ->where('ppp_user_id', $ppp->id)
-                ->get()
-                ->each(fn ($mapping) => $knownMappings->push($mapping));
-        }
-
-        $knownMappings = $knownMappings->unique('id')->values();
+        // A stored ONU slot is only a hint. Even when its saved PPP link and
+        // last_caller_id agree, it may be stale (a subscriber can move PON/ONU).
+        // Always corroborate the current RouterOS caller MAC against the live
+        // read-only OLT dynamic MAC table before accepting or moving a link.
         $matches = [];
         $oltErrors = [];
+        $liveOnuRowsByOlt = [];
+        $identityRevalidatedByLiveMac = false;
+        $callerMacSeenOnOfflineOrUnknownOnu = false;
 
-        if ($knownMappings->count() > 1) {
-            throw new RuntimeException('এই customer-এর saved PPPoE identity একাধিক ONU-তে linked; realtime sync ambiguous, কোনো পরিবর্তন করা হয়নি।');
+        $olts = NetworkInventoryDevice::query()
+            ->where('type', 'olt')
+            ->where('is_active', true)
+            ->get();
+
+        if ($olts->isEmpty()) {
+            throw new RuntimeException('কোনো active OLT পাওয়া যায়নি।');
         }
 
-        if ($knownMappings->count() === 1) {
-            /** @var OltOnuCustomerMapping $knownMapping */
-            $knownMapping = $knownMappings->first();
-            $knownOlt = $knownMapping->olt;
-            if (! $knownOlt || ! $knownOlt->is_active) {
-                throw new RuntimeException('Saved ONU mapping-এর OLT inactive বা unavailable।');
-            }
-
+        foreach ($olts as $olt) {
             try {
-                $source = $this->adapterManager->read($knownOlt);
-                $rows = array_values(array_filter((array) ($source['onus'] ?? []), 'is_array'));
-                $targetRows = array_values(array_filter($rows, function (array $row) use ($knownMapping): bool {
-                    $pon = trim((string) ($row['pon_port'] ?? $row['pon'] ?? $row['ponPort'] ?? ''));
-                    $onuId = trim((string) ($row['onu_id'] ?? $row['onuId'] ?? $row['id'] ?? ''));
+                $snapshot = $this->liveIdentitySnapshots[$olt->id] ?? null;
+                $snapshotIsFresh = is_array($snapshot)
+                    && ($snapshot['captured_at'] ?? null) instanceof Carbon
+                    && now()->diffInSeconds($snapshot['captured_at']) <= self::LIVE_IDENTITY_SNAPSHOT_TTL_SECONDS
+                    && is_array($snapshot['onus'] ?? null)
+                    && $snapshot['onus'] !== [];
 
-                    return $pon === (string) $knownMapping->pon_port && $onuId === (string) $knownMapping->onu_id;
-                }));
-
-                if (count($targetRows) !== 1) {
-                    throw new RuntimeException('Saved PON/ONU identity live OLT inventory-তে unique ভাবে পাওয়া যায়নি।');
-                }
-
-                $targetOnu = $targetRows[0];
-                if (strcasecmp((string) $knownOlt->vendor, 'VSOL') === 0) {
-                    // The normalized SNMP inventory may contain identity/status
-                    // but omit live optical readings. Enrich this same poll with
-                    // the VSOL read-only SSH OPM table, then select only this ONU.
-                    $opm = $this->vsolOpmCollector->collect($knownOlt, $rows, (string) $knownMapping->pon_port, (string) $knownMapping->onu_id);
-                    if (($opm['meta']['read_only'] ?? false) === true
-                        && ($opm['meta']['writes_performed'] ?? true) === false
-                        && is_array($opm['onus'] ?? null)) {
-                        $opmRows = array_values(array_filter((array) $opm['onus'], function (array $row) use ($knownMapping): bool {
-                            return trim((string) ($row['pon_port'] ?? $row['pon'] ?? $row['ponPort'] ?? '')) === (string) $knownMapping->pon_port
-                                && trim((string) ($row['onu_id'] ?? $row['onuId'] ?? $row['id'] ?? '')) === (string) $knownMapping->onu_id;
-                        }));
-                        if (count($opmRows) === 1) {
-                            $targetOnu = array_merge($targetOnu, array_filter($opmRows[0], static fn ($value, $key) => in_array($key, ['rx_power', 'tx_power', 'temperature', 'supply_voltage', 'distance_m', 'opm_source'], true), ARRAY_FILTER_USE_BOTH));
-                        }
+                if ($snapshotIsFresh) {
+                    $onus = $snapshot['onus'];
+                } else {
+                    $source = $this->adapterManager->read($olt);
+                    if (($source['ok'] ?? false) !== true
+                        || ($source['meta']['read_only'] ?? false) !== true
+                        || ($source['meta']['writes_performed'] ?? true) !== false
+                        || ! in_array(($source['status'] ?? null), ['ok', 'partial'], true)) {
+                        throw new RuntimeException($source['message'] ?? 'OLT did not return a complete verified read-only inventory.');
                     }
+
+                    $onus = array_values(array_filter((array) ($source['onus'] ?? []), 'is_array'));
+                    if ($onus === []) {
+                        throw new RuntimeException('OLT returned no normalized ONU inventory.');
+                    }
+
+                    $snmpFdbReadable = ($source['meta']['client_mac_discovery_configured'] ?? false) === true
+                        && ($source['meta']['client_mac_fdb_readable'] ?? false) === true;
+
+                    if (strcasecmp((string) $olt->vendor, 'VSOL') === 0 && ! $snmpFdbReadable) {
+                        // SNMP bridge-FDB is preferred when the device exposes it.
+                        // SSH remains a read-only fallback on firmware/SNMP views
+                        // where standard dot1d/dot1q FDB walks are unavailable.
+                        $macResult = $this->vsolOpmCollector->collect($olt, $onus, null, null, true, false);
+                        if (($macResult['meta']['read_only'] ?? false) !== true
+                            || ($macResult['meta']['writes_performed'] ?? true) !== false
+                            || ! is_array($macResult['onus'] ?? null)) {
+                            throw new RuntimeException($macResult['message'] ?? 'VSOL read-only dynamic MAC table is unavailable.');
+                        }
+                        $onus = array_values(array_filter($macResult['onus'], 'is_array'));
+                    }
+
+                    if ($onus === []) {
+                        throw new RuntimeException('OLT returned no normalized ONU rows after live MAC verification.');
+                    }
+
+                    // One short batch can verify multiple PPP accounts against the
+                    // same read-only OLT FDB snapshot. RouterOS caller-id is still
+                    // read fresh for each account; cache expires after five minutes.
+                    $this->liveIdentitySnapshots[$olt->id] = [
+                        'captured_at' => now(),
+                        'onus' => $onus,
+                    ];
                 }
 
-                $matches[$knownOlt->id.'|'.$knownMapping->pon_port.'|'.$knownMapping->onu_id] = [
-                    'olt' => $knownOlt,
-                    'onu' => $targetOnu,
-                    'pon' => (string) $knownMapping->pon_port,
-                    'onu_id' => (string) $knownMapping->onu_id,
-                ];
+                $liveOnuRowsByOlt[$olt->id] = $onus;
+
+                foreach ($onus as $onu) {
+                    $clientMacs = collect((array) ($onu['client_macs'] ?? []))
+                        ->map(fn ($mac) => $this->normalizeMac($mac))
+                        ->filter()
+                        ->unique();
+                    if (! $clientMacs->contains($callerMac)) {
+                        continue;
+                    }
+
+                    $pon = trim((string) ($onu['pon_port'] ?? $onu['pon'] ?? $onu['ponPort'] ?? ''));
+                    $onuId = trim((string) ($onu['onu_id'] ?? $onu['onuId'] ?? $onu['id'] ?? ''));
+                    if ($pon === '' || $onuId === '') {
+                        continue;
+                    }
+
+                    if ($this->normalizeOnuStatus($onu['status'] ?? null) !== 'online') {
+                        $callerMacSeenOnOfflineOrUnknownOnu = true;
+
+                        continue;
+                    }
+
+                    $matches[$olt->id.'|'.$pon.'|'.$onuId] = [
+                        'olt' => $olt,
+                        'onu' => $onu,
+                        'pon' => $pon,
+                        'onu_id' => $onuId,
+                    ];
+                    $identityRevalidatedByLiveMac = true;
+                }
             } catch (\Throwable $exception) {
-                $oltErrors[] = $knownOlt->name.': '.$exception->getMessage();
+                $oltErrors[] = $olt->name.': '.$exception->getMessage();
             }
         }
-
-        // A saved identity is only a hint. If it is not present exactly once in
-        // live inventory, fall back to exact live PPPoE-MAC discovery. This is
-        // read-only and will not guess or update a mapping unless one ONU matches.
-        if ($matches === []) {
-            // If saved PON/ONU identity is stale or ambiguous, resolve this exact
-            // live PPP caller-id against the read-only OLT MAC table instead.
-            $olts = NetworkInventoryDevice::query()
-                ->where('type', 'olt')
-                ->where('is_active', true)
-                ->get();
-
-            if ($olts->isEmpty()) {
-                throw new RuntimeException('কোনো active OLT পাওয়া যায়নি।');
-            }
-
-            foreach ($olts as $olt) {
-                try {
-                    $source = $this->adapterManager->read($olt);
-                    $onus = array_values(array_filter((array) ($source['onus'] ?? []), 'is_array'));
-
-                    if (strcasecmp((string) $olt->vendor, 'VSOL') === 0 && $onus !== []) {
-                        // V1600D4/V1.0.2R has a verified CLI MAC table while its
-                        // selected SNMP authInfo profile intentionally disables
-                        // bridge-FDB discovery. Read the CLI table directly and
-                        // join its exact EPON0/PON:ONU port to live SNMP inventory.
-                        $macTable = $this->vsolCli->readOnlyMacTable($olt);
-                        $macRows = array_values(array_filter(
-                            (array) ($macTable['dynamic_onu_client_macs'] ?? []),
-                            fn ($row) => $this->normalizeMac($row['mac'] ?? null) === $callerMac
-                        ));
-
-                        foreach ($macRows as $macRow) {
-                            $pon = trim((string) ($macRow['pon_port'] ?? ''));
-                            $onuId = trim((string) ($macRow['onu_id'] ?? ''));
-                            if ($pon === '' || $onuId === '') continue;
-
-                            $targetRows = array_values(array_filter($onus, function (array $row) use ($pon, $onuId): bool {
-                                return trim((string) ($row['pon_port'] ?? $row['pon'] ?? $row['ponPort'] ?? '')) === $pon
-                                    && trim((string) ($row['onu_id'] ?? $row['onuId'] ?? $row['id'] ?? '')) === $onuId;
-                            }));
-                            if (count($targetRows) !== 1) continue;
-
-                            $matches[$olt->id.'|'.$pon.'|'.$onuId] = [
-                                'olt' => $olt,
-                                'onu' => $targetRows[0],
-                                'pon' => $pon,
-                                'onu_id' => $onuId,
-                            ];
-                        }
-                    } else {
-                        foreach ($onus as $onu) {
-                            $clientMacs = collect((array) ($onu['client_macs'] ?? []))
-                                ->map(fn ($mac) => $this->normalizeMac($mac))
-                                ->filter()
-                                ->unique();
-
-                            if (! $clientMacs->contains($callerMac)) continue;
-
-                            $pon = trim((string) ($onu['pon_port'] ?? $onu['pon'] ?? $onu['ponPort'] ?? ''));
-                            $onuId = trim((string) ($onu['onu_id'] ?? $onu['onuId'] ?? $onu['id'] ?? ''));
-                            if ($pon === '' || $onuId === '') continue;
-
-                            $matches[$olt->id.'|'.$pon.'|'.$onuId] = [
-                                'olt' => $olt,
-                                'onu' => $onu,
-                                'pon' => $pon,
-                                'onu_id' => $onuId,
-                            ];
-                        }
-                    }
-                } catch (\Throwable $exception) {
-                    $oltErrors[] = $olt->name.': '.$exception->getMessage();
-                }
-            }
-            }
 
         if (count($matches) !== 1) {
             if (count($matches) > 1) {
@@ -248,6 +201,9 @@ class CustomerOnuRealtimeSyncService
             }
 
             $detail = $oltErrors !== [] ? ' OLT read error: '.implode(' | ', array_slice($oltErrors, 0, 2)) : '';
+            if ($callerMacSeenOnOfflineOrUnknownOnu) {
+                throw new RuntimeException('Live PPPoE MAC '.$callerMac.' MAC table-এ পাওয়া গেছে, কিন্তু সংশ্লিষ্ট ONU বর্তমানে Offline/Unknown; ভুল mapping এড়াতে কোনো পরিবর্তন করা হয়নি.'.$detail);
+            }
             throw new RuntimeException('Live PPPoE MAC '.$callerMac.' কোনো OLT-এর Dynamic MAC table-এ পাওয়া যায়নি।'.$detail);
         }
 
@@ -256,8 +212,22 @@ class CustomerOnuRealtimeSyncService
         $onu = $match['onu'];
         $pon = $match['pon'];
         $onuId = $match['onu_id'];
+        $normalizedOnuStatus = $this->normalizeOnuStatus($onu['status'] ?? null);
 
-        $result = DB::transaction(function () use ($customer, $ppp, $callerMac, $identitySource, $active, $olt, $onu, $pon, $onuId): array {
+        $result = DB::transaction(function () use (
+            $customer,
+            $ppp,
+            $callerMac,
+            $identitySource,
+            $active,
+            $olt,
+            $onu,
+            $pon,
+            $onuId,
+            $normalizedOnuStatus,
+            $identityRevalidatedByLiveMac,
+            $liveOnuRowsByOlt
+        ): array {
             $mappingRows = OltOnuCustomerMapping::query()
                 ->where('olt_device_id', $olt->id)
                 ->where('pon_port', $pon)
@@ -289,7 +259,7 @@ class CustomerOnuRealtimeSyncService
             }
 
             $previousLink = $activeLinks->first();
-            $previousLinkMapping = $previousLink && (!$targetMapping || (int) $previousLink->olt_onu_customer_mapping_id !== (int) $targetMapping->id)
+            $previousLinkMapping = $previousLink && (! $targetMapping || (int) $previousLink->olt_onu_customer_mapping_id !== (int) $targetMapping->id)
                 ? OltOnuCustomerMapping::query()->lockForUpdate()->find($previousLink->olt_onu_customer_mapping_id)
                 : null;
             $previousPrimary = $previousPrimaryMappings->first();
@@ -298,29 +268,65 @@ class CustomerOnuRealtimeSyncService
             if ($previousPrimary && $previousLinkMapping && (int) $previousPrimary->id !== (int) $previousLinkMapping->id) {
                 throw new RuntimeException('Legacy primary mapping এবং active PPP link ভিন্ন ONU-তে আছে; manual review প্রয়োজন।');
             }
+            $previousMappingOwnsThisPrimary = $previousPrimary !== null;
             if ($previousMapping) {
                 if ((int) $previousMapping->olt_device_id !== (int) $olt->id
-                    || ($previousMapping->customer_id && (int) $previousMapping->customer_id !== (int) $customer->id)
-                    || ($previousMapping->ppp_user_id && (int) $previousMapping->ppp_user_id !== (int) $ppp->id)) {
-                    throw new RuntimeException('আগের ONU mapping অন্য customer/OLT-এর; স্বয়ংক্রিয়ভাবে স্থানান্তর করা হয়নি।');
+                    || $this->mappingHasUnresolvableIdentityConflict($previousMapping)) {
+                    throw new RuntimeException('Previous ONU mapping has a conflicting physical identity or belongs to another OLT; it was not detached.');
                 }
-                $otherSubscribers = OltOnuCustomerPppLink::query()
-                    ->where('olt_onu_customer_mapping_id', $previousMapping->id)
-                    ->where('status', 'active')
-                    ->where('ppp_user_id', '<>', $ppp->id)
-                    ->exists();
-                if ($otherSubscribers) {
-                    throw new RuntimeException('আগের ONU mapping-এ অন্য active subscriber আছে; shared ONU mapping manual review ছাড়া সরানো হবে না।');
+
+                $previousLiveRows = array_values(array_filter(
+                    (array) ($liveOnuRowsByOlt[$previousMapping->olt_device_id] ?? []),
+                    'is_array'
+                ));
+                $previousLiveOnu = collect($previousLiveRows)->first(fn (array $row): bool => trim((string) ($row['pon_port'] ?? $row['pon'] ?? $row['ponPort'] ?? '')) === (string) $previousMapping->pon_port
+                    && trim((string) ($row['onu_id'] ?? $row['onuId'] ?? $row['id'] ?? '')) === (string) $previousMapping->onu_id
+                );
+                $previousPhysicalIdentityMatches = is_array($previousLiveOnu)
+                    && $this->mappingMatchesLivePhysicalIdentity($previousMapping, $previousLiveOnu);
+
+                if ($this->mappingHasStableIdentityWarning($previousMapping) && ! $previousPhysicalIdentityMatches) {
+                    throw new RuntimeException('Previous ONU mapping still has an unresolved stable-identity warning; live ONU MAC/Serial did not verify it, so no subscriber link was moved.');
+                }
+
+                if (is_array($previousLiveOnu)
+                    && ! $previousPhysicalIdentityMatches
+                    && ($this->normalizeMac($previousMapping->onu_mac) !== null || trim((string) $previousMapping->onu_serial) !== '')) {
+                    throw new RuntimeException('Previous ONU slot now reports a different physical MAC/Serial; subscriber link was not detached automatically.');
+                }
+
+                if ($previousMappingOwnsThisPrimary) {
+                    if (($previousMapping->customer_id && (int) $previousMapping->customer_id !== (int) $customer->id)
+                        || ($previousMapping->ppp_user_id && (int) $previousMapping->ppp_user_id !== (int) $ppp->id)) {
+                        throw new RuntimeException('Legacy primary mapping owner differs from the active PPP subscriber; no reassignment was made.');
+                    }
+                } elseif (
+                    ($previousMapping->customer_id && (int) $previousMapping->customer_id === (int) $customer->id
+                        && $previousMapping->ppp_user_id && (int) $previousMapping->ppp_user_id !== (int) $ppp->id)
+                    || ($previousMapping->ppp_user_id && (int) $previousMapping->ppp_user_id === (int) $ppp->id
+                        && $previousMapping->customer_id && (int) $previousMapping->customer_id !== (int) $customer->id)
+                ) {
+                    throw new RuntimeException('Previous ONU shared-link primary columns contain a split customer/PPPoE owner; manual review is required.');
                 }
             }
 
-            $allowedPreviousIds = collect([$previousMapping?->id])->filter()->values()->all();
-            $mapping = $targetMapping ?: ($previousMapping ?: new OltOnuCustomerMapping([
+            $allowedPreviousIds = $previousMappingOwnsThisPrimary
+                ? [$previousMapping->id]
+                : [];
+            $mapping = $targetMapping ?: ($previousMappingOwnsThisPrimary ? $previousMapping : new OltOnuCustomerMapping([
                 'olt_device_id' => $olt->id,
                 'pon_port' => $pon,
                 'onu_id' => $onuId,
             ]));
             $mappingId = $mapping->exists ? $mapping->id : null;
+
+            if ($targetMapping && (
+                $this->mappingHasUnresolvableIdentityConflict($targetMapping)
+                || ($this->mappingHasStableIdentityWarning($targetMapping)
+                    && ! $this->mappingMatchesLivePhysicalIdentity($targetMapping, $onu))
+            )) {
+                throw new RuntimeException('Target ONU has an unresolved duplicate-MAC or physical-identity conflict; mapping was not changed.');
+            }
 
             $otherPrimary = OltOnuCustomerMapping::query()
                 ->when($mappingId, fn ($query) => $query->where('id', '<>', $mappingId))
@@ -336,14 +342,32 @@ class CustomerOnuRealtimeSyncService
             }
 
             $now = now();
+
+            if ($identityRevalidatedByLiveMac) {
+                $mappingPhysicalIdentityVerified = $targetMapping
+                    && $this->mappingHasStableIdentityWarning($targetMapping)
+                    && $this->mappingMatchesLivePhysicalIdentity($targetMapping, $onu);
+                $mapping->notes = $this->resolveManualReviewNotes(
+                    $mapping->notes,
+                    $callerMac,
+                    (string) $olt->name,
+                    $pon,
+                    $onuId,
+                    $now,
+                    $mappingPhysicalIdentityVerified
+                );
+            }
+
             $mapping->fill([
                 'pon_port' => $pon,
                 'onu_id' => $onuId,
                 'onu_mac' => $onu['onu_mac'] ?? $mapping->onu_mac,
                 'onu_serial' => $onu['onu_serial'] ?? $mapping->onu_serial,
                 'onu_type' => $onu['onu_type'] ?? $mapping->onu_type,
-                'status' => strtolower((string) ($onu['status'] ?? 'online')) === 'offline' ? 'offline' : 'online',
-                'last_seen_at' => $now,
+                'status' => $normalizedOnuStatus,
+                // last_seen_at means the ONU was actually seen online; a poll of
+                // an offline/unknown row must not make it look freshly present.
+                'last_seen_at' => $normalizedOnuStatus === 'online' ? $now : $mapping->last_seen_at,
             ]);
 
             $hasFreshOpm = false;
@@ -372,10 +396,82 @@ class CustomerOnuRealtimeSyncService
 
             $mapping->save();
 
-            if ($previousMapping && (int) $previousMapping->id !== (int) $mapping->id) {
+            if ($identityRevalidatedByLiveMac) {
+                $ledgerRows = OnuMacLedger::query()
+                    ->where('olt_device_id', $olt->id)
+                    ->where('pon_port', $pon)
+                    ->where('onu_id', $onuId)
+                    ->lockForUpdate()
+                    ->get();
+
+                if ($ledgerRows->count() === 1) {
+                    $ledger = $ledgerRows->first();
+                    $ledgerPhysicalIdentityVerified = $this->ledgerMatchesLivePhysicalIdentity($ledger, $onu);
+                    $previousLedgerCustomer = trim((string) $ledger->customer_unique_id);
+                    $previousLedgerPppoe = trim((string) $ledger->pppoe_username);
+
+                    if (! $ledgerPhysicalIdentityVerified) {
+                        $ledger->notes = trim((string) $ledger->notes."\n".sprintf(
+                            'Ledger physical identity conflict held for manual review: stored ONU MAC %s / Serial %s does not match the live ONU identity on %s PON %s / ONU %s.',
+                            trim((string) $ledger->current_mac) ?: 'missing',
+                            trim((string) $ledger->serial_no) ?: 'missing',
+                            $olt->name,
+                            $pon,
+                            $onuId
+                        ));
+                        $ledger->save();
+                    } else {
+                        $activeOtherSubscribers = OltOnuCustomerPppLink::query()
+                            ->where('olt_onu_customer_mapping_id', $mapping->id)
+                            ->where('status', 'active')
+                            ->where('ppp_user_id', '<>', $ppp->id)
+                            ->exists();
+
+                        $resolvedLedgerNotes = $this->resolveManualReviewNotes(
+                            $ledger->notes,
+                            $callerMac,
+                            (string) $olt->name,
+                            $pon,
+                            $onuId,
+                            $now,
+                            true
+                        );
+
+                        if ($previousLedgerCustomer !== '' && $previousLedgerCustomer !== (string) $customer->customer_unique_id) {
+                            $history = sprintf(
+                                'Previous ONU ledger association retained for audit: %s / %s; current unique live PPPoE dynamic-MAC verification is %s / %s on %s PON %s / ONU %s.',
+                                $previousLedgerCustomer,
+                                $previousLedgerPppoe !== '' ? $previousLedgerPppoe : 'unknown PPPoE user',
+                                $customer->customer_unique_id,
+                                $ppp->username,
+                                $olt->name,
+                                $pon,
+                                $onuId
+                            );
+                            $resolvedLedgerNotes = trim((string) $resolvedLedgerNotes."\n".$history);
+                        }
+
+                        if (! $activeOtherSubscribers) {
+                            $ledger->customer_id = $customer->id;
+                            $ledger->customer_unique_id = $customer->customer_unique_id;
+                            $ledger->pppoe_username = $ppp->username;
+                            $ledger->service_type = $ppp->service;
+                        }
+                        $ledger->status = $normalizedOnuStatus;
+                        $ledger->rx_power = $mapping->rx_power ?? $ledger->rx_power;
+                        $ledger->tx_power = $mapping->tx_power ?? $ledger->tx_power;
+                        $ledger->last_seen_at = $mapping->last_seen_at ?? $ledger->last_seen_at;
+                        $ledger->notes = $resolvedLedgerNotes;
+                        $ledger->save();
+                    }
+                }
+            }
+
+            if ($previousMappingOwnsThisPrimary && $previousMapping && (int) $previousMapping->id !== (int) $mapping->id) {
+                // Detach only this subscriber's legacy primary ownership. Other
+                // active shared PPP links remain attached to the physical ONU row.
                 $previousMapping->customer_id = null;
                 $previousMapping->ppp_user_id = null;
-                $previousMapping->status = 'offline';
                 $previousMapping->save();
             }
 
@@ -440,6 +536,175 @@ class CustomerOnuRealtimeSyncService
         ]);
 
         return $result + ['olt_name' => $olt->name, 'customer_code' => $customer->customer_unique_id];
+    }
+
+    /**
+     * A saved PPP link is not proof of a current ONU identity when its mapping
+     * carries an unresolved reconciliation/manual-review warning.
+     */
+    private function mappingRequiresManualReview(OltOnuCustomerMapping $mapping): bool
+    {
+        $notes = strtolower(trim((string) $mapping->notes));
+
+        foreach ([
+            'manual review',
+            'requires operator review',
+            'requires explicit review',
+            'customer/pppoe link cleared',
+            'does not match pppoe last_caller_id',
+            'identity conflict',
+            'duplicate live mac',
+            'stable onu identity changed',
+        ] as $marker) {
+            if (str_contains($notes, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Duplicate MAC and stable hardware-identity conflicts need human review;
+     * a unique live client-MAC table match cannot resolve those physical conflicts.
+     */
+    private function mappingHasUnresolvableIdentityConflict(OltOnuCustomerMapping $mapping): bool
+    {
+        $notes = strtolower(trim((string) $mapping->notes));
+
+        foreach (['duplicate live mac', 'conflicting onu serial'] as $marker) {
+            if (str_contains($notes, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function ledgerMatchesLivePhysicalIdentity(OnuMacLedger $ledger, array $onu): bool
+    {
+        $storedMac = $this->normalizeMac($ledger->current_mac);
+        $liveMac = $this->normalizeMac($onu['onu_mac'] ?? null);
+        $storedSerial = strtolower(trim((string) $ledger->serial_no));
+        $liveSerial = strtolower(trim((string) ($onu['onu_serial'] ?? '')));
+
+        if ($storedSerial !== '') {
+            return $liveSerial !== '' && hash_equals($storedSerial, $liveSerial)
+                && ($storedMac === null || $liveMac === null || hash_equals($storedMac, $liveMac));
+        }
+
+        return $storedMac !== null && $liveMac !== null && hash_equals($storedMac, $liveMac);
+    }
+
+    private function mappingHasStableIdentityWarning(OltOnuCustomerMapping $mapping): bool
+    {
+        return str_contains(strtolower(trim((string) $mapping->notes)), 'stable onu identity changed');
+    }
+
+    /**
+     * A historical stable-identity warning is resolvable only when the current
+     * OLT row reproduces the saved ONU hardware identity exactly. Caller MAC alone
+     * is not enough to override a physical ONU identity warning.
+     */
+    private function mappingMatchesLivePhysicalIdentity(OltOnuCustomerMapping $mapping, array $onu): bool
+    {
+        $storedMac = $this->normalizeMac($mapping->onu_mac);
+        $liveMac = $this->normalizeMac($onu['onu_mac'] ?? null);
+        $storedSerial = strtolower(trim((string) $mapping->onu_serial));
+        $liveSerial = strtolower(trim((string) ($onu['onu_serial'] ?? '')));
+
+        if ($storedSerial !== '') {
+            return $liveSerial !== '' && hash_equals($storedSerial, $liveSerial)
+                && ($storedMac === null || $liveMac === null || hash_equals($storedMac, $liveMac));
+        }
+
+        return $storedMac !== null && $liveMac !== null && hash_equals($storedMac, $liveMac);
+    }
+
+    /**
+     * Resolve only generic customer/PPPoE review markers after a unique live
+     * dynamic-MAC match. Preserve non-review notes and retain an audit summary.
+     */
+    private function resolveManualReviewNotes(
+        ?string $notes,
+        string $callerMac,
+        string $oltName,
+        string $pon,
+        string $onuId,
+        Carbon $verifiedAt,
+        bool $clearStableIdentityWarning = false
+    ): ?string {
+        $lines = preg_split('/\R/', trim((string) $notes)) ?: [];
+        $remaining = [];
+
+        foreach ($lines as $line) {
+            $normalized = strtolower(trim($line));
+            if ($normalized === '') {
+                continue;
+            }
+
+            if (
+                str_contains($normalized, 'duplicate live mac')
+                || str_contains($normalized, 'conflicting onu serial')
+            ) {
+                return $notes;
+            }
+
+            if (str_contains($normalized, 'stable onu identity changed')) {
+                if ($clearStableIdentityWarning) {
+                    continue;
+                }
+                $remaining[] = trim($line);
+
+                continue;
+            }
+
+            if (
+                str_contains($normalized, 'manual review')
+                || str_contains($normalized, 'requires operator review')
+                || str_contains($normalized, 'requires explicit review')
+                || str_contains($normalized, 'customer/pppoe link cleared')
+                || str_contains($normalized, 'does not match pppoe last_caller_id')
+                || str_contains($normalized, 'identity conflict')
+            ) {
+                continue;
+            }
+
+            $remaining[] = trim($line);
+        }
+
+        $auditMarker = sprintf(
+            'Customer/PPPoE identity revalidated by unique live dynamic MAC %s on %s PON %s / ONU %s',
+            $callerMac,
+            $oltName,
+            $pon,
+            $onuId
+        );
+
+        if (str_contains(strtolower((string) $notes), strtolower($auditMarker))) {
+            return $notes;
+        }
+
+        // Even a clean target row needs an audit trail when a flagged/stale
+        // source mapping was bypassed and its subscriber link was moved here.
+        $remaining[] = $auditMarker.' at '.$verifiedAt->toDateTimeString().'.';
+
+        return implode("\n", $remaining);
+    }
+
+    private function normalizeOnuStatus(mixed $status): string
+    {
+        $status = strtolower(trim((string) $status));
+
+        if (in_array($status, ['1', 'online', 'up', 'active', 'registered', 'auth success'], true)) {
+            return 'online';
+        }
+
+        if (in_array($status, ['0', '2', '4', 'offline', 'down', 'inactive', 'lost', 'deregistered', 'unregistered'], true)) {
+            return 'offline';
+        }
+
+        return 'unknown';
     }
 
     private function findRouterRow(array $rows, string $username): ?array

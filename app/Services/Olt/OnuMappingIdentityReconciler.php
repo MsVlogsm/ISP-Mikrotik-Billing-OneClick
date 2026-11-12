@@ -18,7 +18,9 @@ class OnuMappingIdentityReconciler
                 throw new InvalidArgumentException('Live ONU data is missing a valid ONU ID, MAC, or PON port.');
             }
             $identityKey = $pon.'|'.$onuId;
-            if (isset($liveById[$identityKey])) throw new InvalidArgumentException("Live SNMP returned duplicate PON/ONU identity {$identityKey}.");
+            if (isset($liveById[$identityKey])) {
+                throw new InvalidArgumentException("Live SNMP returned duplicate PON/ONU identity {$identityKey}.");
+            }
             $row['onu_id'] = $onuId;
             $row['pon_port'] = $pon;
             $row['onu_mac'] = $mac;
@@ -32,11 +34,14 @@ class OnuMappingIdentityReconciler
         foreach ($liveRowsByMac as $mac => $group) {
             if (count($group) > 1) {
                 $ambiguousLive[$mac] = $group;
+
                 continue;
             }
             $liveByMac[$mac] = $group[0];
         }
-        if (!$liveByMac && !$ambiguousLive) throw new InvalidArgumentException('Live SNMP returned no valid ONU identities.');
+        if (! $liveByMac && ! $ambiguousLive) {
+            throw new InvalidArgumentException('Live SNMP returned no valid ONU identities.');
+        }
 
         $mappingByMac = [];
         $mappingBySlot = [];
@@ -49,7 +54,9 @@ class OnuMappingIdentityReconciler
             $data = is_array($mapping) ? $mapping : $mapping->getAttributes();
             $mac = self::normalizeMac($data['onu_mac'] ?? null);
             $rowId = (int) ($data['id'] ?? 0);
-            if ($rowId <= 0) throw new InvalidArgumentException('Stored ONU mapping has no primary key.');
+            if ($rowId <= 0) {
+                throw new InvalidArgumentException('Stored ONU mapping has no primary key.');
+            }
             $slotKey = trim((string) ($data['pon_port'] ?? '')).'|'.trim((string) ($data['onu_id'] ?? ''));
             if ($slotKey !== '|') {
                 if (isset($mappingBySlot[$slotKey])) {
@@ -63,8 +70,9 @@ class OnuMappingIdentityReconciler
                     'current_pon_port' => (string) ($data['pon_port'] ?? ''),
                     'current_onu_id' => (string) ($data['onu_id'] ?? ''),
                     'onu_mac' => $mac,
-                    'linked' => !empty($data['customer_id']) || !empty($data['ppp_user_id']),
+                    'linked' => ! empty($data['customer_id']) || ! empty($data['ppp_user_id']),
                 ];
+
                 continue;
             }
             if ($mac !== null && isset($ambiguousLive[$mac])) {
@@ -73,20 +81,43 @@ class OnuMappingIdentityReconciler
                     'current_pon_port' => (string) ($data['pon_port'] ?? ''),
                     'current_onu_id' => (string) ($data['onu_id'] ?? ''),
                     'onu_mac' => $mac,
-                    'linked' => !empty($data['customer_id']) || !empty($data['ppp_user_id']),
+                    'linked' => ! empty($data['customer_id']) || ! empty($data['ppp_user_id']),
                     'live_locations' => array_map(
                         static fn ($row) => ['pon_port' => $row['pon_port'], 'onu_id' => $row['onu_id'], 'status' => $row['status']],
                         $ambiguousLive[$mac]
                     ),
                 ];
+
                 continue;
             }
             if ($mac !== null && isset($liveByMac[$mac])) {
-                if (isset($mappingByMac[$mac])) throw new InvalidArgumentException("Stored ONU MAC {$mac} occurs in multiple mapping rows.");
+                $storedSerial = strtolower(trim((string) ($data['onu_serial'] ?? '')));
+                $liveSerial = strtolower(trim((string) ($liveByMac[$mac]['onu_serial'] ?? '')));
+                if ($storedSerial !== '' && $liveSerial !== '' && ! hash_equals($storedSerial, $liveSerial)) {
+                    $linked = ! empty($data['customer_id']) || ! empty($data['ppp_user_id']);
+                    $stale[] = [
+                        'mapping_id' => $rowId,
+                        'current_pon_port' => (string) ($data['pon_port'] ?? ''),
+                        'current_onu_id' => (string) ($data['onu_id'] ?? ''),
+                        'onu_mac' => $mac,
+                        'linked' => $linked,
+                        'serial_conflict' => true,
+                    ];
+                    if ($linked) {
+                        $blockers[] = "Stored mapping row {$rowId} MAC {$mac} matches a live ONU, but the stored Serial conflicts with the live Serial; manual physical-identity review is required.";
+                    }
+
+                    continue;
+                }
+
+                if (isset($mappingByMac[$mac])) {
+                    throw new InvalidArgumentException("Stored ONU MAC {$mac} occurs in multiple mapping rows.");
+                }
                 $mappingByMac[$mac] = $data;
+
                 continue;
             }
-            $linked = !empty($data['customer_id']) || !empty($data['ppp_user_id']);
+            $linked = ! empty($data['customer_id']) || ! empty($data['ppp_user_id']);
             $stale[] = ['mapping_id' => $rowId, 'current_onu_id' => (string) ($data['onu_id'] ?? ''), 'onu_mac' => $mac, 'linked' => $linked];
             // Never archive/rekey a stale identity automatically while a customer
             // or PPPoE account is attached; manual identity review is required.
@@ -104,11 +135,13 @@ class OnuMappingIdentityReconciler
                     if ($storedMac !== $mac) {
                         $blockers[] = "Live ambiguous MAC {$mac} targets {$slotKey}, but a different stored ONU identity occupies that slot.";
                     }
+
                     continue;
                 }
                 $ambiguousNew[] = [
                     'onu_id' => $live['onu_id'],
                     'onu_mac' => $mac,
+                    'onu_serial' => $live['onu_serial'] ?? null,
                     'pon_port' => $live['pon_port'],
                     'status' => $live['status'],
                 ];
@@ -129,12 +162,13 @@ class OnuMappingIdentityReconciler
                     'current_onu_id' => $currentId,
                     'target_onu_id' => $live['onu_id'],
                     'onu_mac' => $mac,
+                    'onu_serial' => $live['onu_serial'] ?? null,
                     'pon_port' => $live['pon_port'],
                     'status' => $live['status'],
                     'changed' => $currentId !== $live['onu_id'] || $currentMac !== $mac || $currentPon !== $live['pon_port'] || $currentStatus !== $live['status'],
                 ];
             } else {
-                $new[] = ['onu_id' => $live['onu_id'], 'onu_mac' => $mac, 'pon_port' => $live['pon_port'], 'status' => $live['status']];
+                $new[] = ['onu_id' => $live['onu_id'], 'onu_mac' => $mac, 'onu_serial' => $live['onu_serial'] ?? null, 'pon_port' => $live['pon_port'], 'status' => $live['status']];
             }
         }
         $targetIds = [];
@@ -144,7 +178,9 @@ class OnuMappingIdentityReconciler
         );
         foreach ($targetRows as [$pon, $id]) {
             $identityKey = trim($pon).'|'.trim($id);
-            if (isset($targetIds[$identityKey])) throw new InvalidArgumentException("Duplicate live target PON/ONU identity {$identityKey}.");
+            if (isset($targetIds[$identityKey])) {
+                throw new InvalidArgumentException("Duplicate live target PON/ONU identity {$identityKey}.");
+            }
             $targetIds[$identityKey] = true;
         }
         foreach ($ambiguous as $row) {
@@ -160,6 +196,7 @@ class OnuMappingIdentityReconciler
             }
             $targetIds[$identityKey] = true;
         }
+
         return [
             'matched' => $matched,
             'stale' => $stale,
@@ -173,9 +210,14 @@ class OnuMappingIdentityReconciler
 
     public static function normalizeMac(mixed $value): ?string
     {
-        if (!is_string($value) && !is_numeric($value)) return null;
+        if (! is_string($value) && ! is_numeric($value)) {
+            return null;
+        }
         $hex = preg_replace('/[^0-9a-f]/i', '', (string) $value);
-        if (!is_string($hex) || strlen($hex) !== 12 || !ctype_xdigit($hex)) return null;
+        if (! is_string($hex) || strlen($hex) !== 12 || ! ctype_xdigit($hex)) {
+            return null;
+        }
+
         return strtolower(implode(':', str_split($hex, 2)));
     }
 }

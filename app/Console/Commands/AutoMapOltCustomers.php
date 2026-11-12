@@ -26,8 +26,7 @@ class AutoMapOltCustomers extends Command
             ->whereNotNull('ppp_user_id')
             ->with('pppUser')
             ->get()
-            ->filter(fn (CustomersInfo $customer) =>
-                $customer->pppUser
+            ->filter(fn (CustomersInfo $customer) => $customer->pppUser
                 && strtolower(trim((string) $customer->pppUser->status)) === 'active'
                 && trim((string) $customer->customer_unique_id) !== ''
             )
@@ -35,6 +34,7 @@ class AutoMapOltCustomers extends Command
 
         if ($customerCandidates->isEmpty()) {
             $this->warn('No active Customer → active PPPoE links are available. Nothing was mapped; the next scheduled run will retry.');
+
             return self::SUCCESS;
         }
 
@@ -60,6 +60,7 @@ class AutoMapOltCustomers extends Command
 
         if ($pppByMac === []) {
             $this->warn('Active Customer/PPPoE links exist, but none has a valid caller_id or last_caller_id MAC. Nothing was mapped.');
+
             return self::SUCCESS;
         }
 
@@ -77,6 +78,7 @@ class AutoMapOltCustomers extends Command
 
         if ($devices->isEmpty()) {
             $this->warn('No active OLT devices matched; no mappings were changed.');
+
             return self::SUCCESS;
         }
 
@@ -90,6 +92,7 @@ class AutoMapOltCustomers extends Command
             } catch (Throwable $exception) {
                 $totals['poll_failures']++;
                 $this->error("OLT #{$device->id}: read-only poll failed: {$exception->getMessage()}");
+
                 continue;
             }
 
@@ -100,12 +103,13 @@ class AutoMapOltCustomers extends Command
             if (($result['ok'] ?? false) !== true
                 || ($result['status'] ?? null) !== 'ok'
                 || ($meta['read_only'] ?? false) !== true
-                || !array_key_exists('writes_performed', $meta)
+                || ! array_key_exists('writes_performed', $meta)
                 || $meta['writes_performed'] !== false
                 || $rows === []
                 || (isset($meta['onu_count']) && (int) $meta['onu_count'] !== count($rows))) {
                 $totals['poll_failures']++;
                 $this->error("OLT #{$device->id}: incomplete/unverified poll; no Customer mapping was attempted.");
+
                 continue;
             }
 
@@ -119,7 +123,7 @@ class AutoMapOltCustomers extends Command
             $clientMacOnuKeys = [];
 
             foreach ($rows as $row) {
-                if (!is_array($row)) {
+                if (! is_array($row)) {
                     $live = [];
                     break;
                 }
@@ -158,13 +162,15 @@ class AutoMapOltCustomers extends Command
             if ($live === [] || count($live) !== count($rows)) {
                 $totals['poll_failures']++;
                 $this->error("OLT #{$device->id}: invalid or duplicate live PON/ONU identity; no Customer mapping was attempted.");
+
                 continue;
             }
 
             foreach ($live as $onu) {
                 $mapping = $mappingRows->get($onu['key']);
-                if (!$mapping) {
+                if (! $mapping) {
                     $totals['no_exact_match']++;
+
                     continue;
                 }
 
@@ -180,23 +186,27 @@ class AutoMapOltCustomers extends Command
                 if ($identityConflict) {
                     $totals['identity_conflicts']++;
                     $this->line("BLOCKED identity conflict: PON {$onu['pon_port']} / ONU {$onu['onu_id']} (existing mapping unchanged).");
+
                     continue;
                 }
 
                 if ($mapping->customer_id !== null || $mapping->ppp_user_id !== null) {
                     $totals['already_assigned']++;
+
                     continue;
                 }
 
                 // Only online ONUs have a current client-MAC/FDB observation suitable for matching.
                 if ($onu['status'] !== 'online') {
                     $totals['no_exact_match']++;
+
                     continue;
                 }
 
                 // Duplicated live ONU MACs are never used as an automatic identity source.
                 if ($onu['onu_mac'] !== '' && ($onuMacCounts[$onu['onu_mac']] ?? 0) > 1) {
                     $totals['duplicate_onu_macs']++;
+
                     continue;
                 }
 
@@ -219,6 +229,7 @@ class AutoMapOltCustomers extends Command
                     } else {
                         $totals['no_exact_match']++;
                     }
+
                     continue;
                 }
 
@@ -226,14 +237,16 @@ class AutoMapOltCustomers extends Command
                 if (isset($usedCustomerIds[(string) $candidate['customer_id']])
                     || isset($usedPppIds[(string) $candidate['ppp_user_id']])) {
                     $totals['already_assigned']++;
+
                     continue;
                 }
 
-                if (!$apply) {
+                if (! $apply) {
                     $totals['would_map']++;
                     $this->line("WOULD MAP PON {$onu['pon_port']} / ONU {$onu['onu_id']} → {$candidate['customer_unique_id']} ({$candidate['pppoe_username']}) by exact FDB/PPPoE caller MAC.");
                     $usedCustomerIds[(string) $candidate['customer_id']] = true;
                     $usedPppIds[(string) $candidate['ppp_user_id']] = true;
+
                     continue;
                 }
 
@@ -267,7 +280,7 @@ class AutoMapOltCustomers extends Command
     {
         return DB::transaction(function () use ($mappingId, $candidate, $onu): bool {
             $mapping = OltOnuCustomerMapping::query()->lockForUpdate()->find($mappingId);
-            if (!$mapping || $mapping->customer_id !== null || $mapping->ppp_user_id !== null) {
+            if (! $mapping || $mapping->customer_id !== null || $mapping->ppp_user_id !== null) {
                 return false;
             }
 
@@ -283,7 +296,7 @@ class AutoMapOltCustomers extends Command
                 return false;
             }
 
-            if (!$customer || !$ppp
+            if (! $customer || ! $ppp
                 || strtolower(trim((string) $customer->status)) !== 'active'
                 || strtolower(trim((string) $ppp->status)) !== 'active'
                 || (int) $customer->ppp_user_id !== (int) $ppp->id
@@ -309,7 +322,7 @@ class AutoMapOltCustomers extends Command
             $note = 'Auto-mapped by exact live ONU FDB client MAC ↔ PPPoE caller_id/last_caller_id match: '
                 .$candidate['pppoe_username'].'; verified '.now()->toIso8601String().'.';
             $existingNotes = trim((string) $mapping->notes);
-            if (!str_contains($existingNotes, $note)) {
+            if (! str_contains($existingNotes, $note)) {
                 $mapping->notes = trim($existingNotes.($existingNotes !== '' ? "\n" : '').$note);
             }
             $mapping->save();
@@ -349,7 +362,14 @@ class AutoMapOltCustomers extends Command
     private function normalizeStatus(array $row): string
     {
         if (array_key_exists('online', $row)) {
-            return in_array($row['online'], [true, 1, '1'], true) ? 'online' : 'offline';
+            if (in_array($row['online'], [true, 1, '1'], true)) {
+                return 'online';
+            }
+            if (in_array($row['online'], [false, 0, '0'], true)) {
+                return 'offline';
+            }
+
+            return 'unknown';
         }
 
         $status = strtolower(trim((string) ($row['status'] ?? 'unknown')));

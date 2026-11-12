@@ -97,10 +97,36 @@ class OnuMacLedgerService
         $record->last_seen_at = $mapping->last_seen_at ?: $record->last_seen_at;
 
         if ($mapping->customer_id && $mapping->customer) {
-            $record->customer_id = $mapping->customer_id;
-            $record->customer_unique_id = $mapping->customer->customer_unique_id;
-            $record->pppoe_username = $mapping->pppUser?->username ?: $mapping->customer->pppUser?->username ?: $record->pppoe_username;
-            $record->service_type = $mapping->pppUser?->service ?: $record->service_type;
+            $incomingCustomerId = (int) $mapping->customer_id;
+            $incomingCustomerCode = trim((string) $mapping->customer->customer_unique_id);
+            $incomingPppUsername = trim((string) ($mapping->pppUser?->username ?: $mapping->customer->pppUser?->username));
+            $ownerAlreadyRecorded = (bool) $record->customer_id
+                || trim((string) $record->customer_unique_id) !== ''
+                || trim((string) $record->pppoe_username) !== '';
+            $ownerConflicts = ($record->customer_id && (int) $record->customer_id !== $incomingCustomerId)
+                || (trim((string) $record->customer_unique_id) !== ''
+                    && strcasecmp(trim((string) $record->customer_unique_id), $incomingCustomerCode) !== 0)
+                || (trim((string) $record->pppoe_username) !== ''
+                    && $incomingPppUsername !== ''
+                    && strcasecmp(trim((string) $record->pppoe_username), $incomingPppUsername) !== 0);
+
+            if (! $ownerAlreadyRecorded) {
+                $record->customer_id = $incomingCustomerId;
+                $record->customer_unique_id = $incomingCustomerCode;
+                $record->pppoe_username = $incomingPppUsername ?: $record->pppoe_username;
+                $record->service_type = $mapping->pppUser?->service ?: $record->service_type;
+            } elseif ($ownerConflicts) {
+                // A ledger ownership change needs the same explicit live-MAC proof
+                // used by CustomerOnuRealtimeSyncService. Scheduled inventory and
+                // stable-MAC rekey jobs must never silently transfer its owner.
+                $this->appendNote($record, sprintf(
+                    'Ledger ownership conflict held for manual review: existing %s / %s; mapping reports %s / %s.',
+                    trim((string) $record->customer_unique_id) ?: 'unknown customer',
+                    trim((string) $record->pppoe_username) ?: 'unknown PPPoE user',
+                    $incomingCustomerCode ?: 'unknown customer',
+                    $incomingPppUsername ?: 'unknown PPPoE user'
+                ));
+            }
         }
 
         if (trim((string) $mapping->notes) !== '') {
@@ -208,19 +234,36 @@ class OnuMacLedgerService
     {
         $notes = strtolower(trim((string) $mapping->notes));
 
-        return str_contains($notes, 'manual review required')
-            || str_contains($notes, 'stable onu identity changed');
+        return $this->notesRequireManualReview($notes);
     }
 
     private function ledgerRequiresManualReview(OnuMacLedger $record): bool
     {
         $notes = strtolower(trim((string) $record->notes));
 
-        return str_contains($notes, 'manual review required')
-            || str_contains($notes, 'requires operator review')
-            || str_contains($notes, 'customer/pppoe link cleared')
-            || str_contains($notes, 'does not match pppoe last_caller_id')
-            || str_contains($notes, 'duplicate live mac');
+        return $this->notesRequireManualReview($notes);
+    }
+
+    private function notesRequireManualReview(string $notes): bool
+    {
+        foreach ([
+            'manual review required',
+            'requires operator review',
+            'requires explicit review',
+            'customer/pppoe link cleared',
+            'does not match pppoe last_caller_id',
+            'duplicate live mac',
+            'stable onu identity changed',
+            'conflicting onu serial',
+            'identity conflict',
+            'ledger ownership conflict held for manual review',
+        ] as $marker) {
+            if (str_contains($notes, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function hasIdentityRecord(Collection $records, OltOnuCustomerMapping $mapping): bool

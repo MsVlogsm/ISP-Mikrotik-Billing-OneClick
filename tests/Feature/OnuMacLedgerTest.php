@@ -157,6 +157,51 @@ class OnuMacLedgerTest extends TestCase
         $this->assertSame($customer->id, $mapping->fresh()->customer_id);
     }
 
+    public function test_record_mapping_never_overwrites_a_review_flagged_ledger_owner(): void
+    {
+        $olt = $this->olt();
+        $oldPpp = $this->ppp('ledger-router-old', 'ledger-old-owner');
+        $oldCustomer = $this->customer('LEDGER-OLD-OWNER', $oldPpp->id);
+        $newPpp = $this->ppp('ledger-router-new', 'ledger-new-owner');
+        $newCustomer = $this->customer('LEDGER-NEW-OWNER', $newPpp->id);
+
+        $ledger = OnuMacLedger::create([
+            'olt_device_id' => $olt->id,
+            'customer_id' => $oldCustomer->id,
+            'customer_unique_id' => $oldCustomer->customer_unique_id,
+            'pon_port' => '1',
+            'onu_id' => '25',
+            'current_mac' => 'AA:BB:CC:DD:EE:25',
+            'serial_no' => 'SERIAL-OWNER-GUARD',
+            'pppoe_username' => $oldPpp->username,
+            'status' => 'online',
+            'notes' => 'Stable ONU identity changed; manual review required.',
+        ]);
+        $mapping = OltOnuCustomerMapping::create([
+            'olt_device_id' => $olt->id,
+            'customer_id' => $newCustomer->id,
+            'ppp_user_id' => $newPpp->id,
+            'onu_id' => '25',
+            'pon_port' => '1',
+            'onu_mac' => 'AA:BB:CC:DD:EE:25',
+            'onu_serial' => 'SERIAL-OWNER-GUARD',
+            'status' => 'online',
+        ]);
+
+        $record = app(OnuMacLedgerService::class)->recordMapping($mapping);
+
+        $this->assertSame($ledger->id, $record->id);
+        $this->assertSame($oldCustomer->id, $record->customer_id);
+        $this->assertSame('LEDGER-OLD-OWNER', $record->customer_unique_id);
+        $this->assertSame('ledger-old-owner', $record->pppoe_username);
+        $this->assertStringContainsString('Ledger ownership conflict held for manual review', $record->notes);
+        $this->assertNull(app(OnuMacLedgerService::class)->findExactCustomerMatch(
+            $olt->id,
+            'AA:BB:CC:DD:EE:25',
+            'SERIAL-OWNER-GUARD'
+        ));
+    }
+
     public function test_super_admin_can_open_mac_ledger_dashboard(): void
     {
         $this->get(route('network-inventory.onu-mac-ledger'))

@@ -4,9 +4,13 @@ namespace Tests\Feature;
 
 use App\Models\CustomersInfo;
 use App\Models\NetworkInventoryDevice;
+use App\Models\OltMonitoringSnapshot;
 use App\Models\OltOnuCustomerMapping;
+use App\Models\OltOnuCustomerPppLink;
+use App\Models\OnuMacLedger;
 use App\Models\PPPSecrets;
 use App\Models\RouterList;
+use App\Services\AiEngineerDiagnosticService;
 use App\Services\Olt\OltReadOnlyAdapterManager;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -71,6 +75,19 @@ class SyncOltOnuMappingsTest extends TestCase
                 'status' => 'online', 'snmp_index' => '1.25',
             ], $extraOnuFields)],
         ]);
+        $this->app->instance(OltReadOnlyAdapterManager::class, $manager);
+    }
+
+    private function fakeAdapterRows(NetworkInventoryDevice $olt, array $onus, string $status = 'ok'): void
+    {
+        $manager = \Mockery::mock(OltReadOnlyAdapterManager::class);
+        $manager->shouldReceive('read')->once()
+            ->with(\Mockery::on(fn ($device) => $device instanceof NetworkInventoryDevice && $device->id === $olt->id))
+            ->andReturn([
+                'ok' => $status === 'ok', 'status' => $status, 'message' => 'test multi-row response',
+                'meta' => ['read_only' => true, 'writes_performed' => false, 'onu_count' => count($onus)],
+                'onus' => $onus,
+            ]);
         $this->app->instance(OltReadOnlyAdapterManager::class, $manager);
     }
 
@@ -200,7 +217,6 @@ class SyncOltOnuMappingsTest extends TestCase
         $this->assertTrue($mapping->opm_last_seen_at->greaterThan($measuredAt));
     }
 
-
     public function test_ai_optical_power_list_exposes_the_opm_measurement_timestamp(): void
     {
         $olt = $this->olt();
@@ -218,7 +234,7 @@ class SyncOltOnuMappingsTest extends TestCase
             'opm_last_seen_at' => $measuredAt,
         ]);
 
-        $row = app(\App\Services\AiEngineerDiagnosticService::class)->opticalPowerList(10)[0];
+        $row = app(AiEngineerDiagnosticService::class)->opticalPowerList(10)[0];
 
         $this->assertSame('test-opm', $row['opm_source']);
         $this->assertSame($measuredAt->toIso8601String(), $row['opm_measured_at']);
@@ -290,7 +306,7 @@ class SyncOltOnuMappingsTest extends TestCase
         $this->artisan('olt:sync-onu-mappings', ['--device' => $olt->id])->assertExitCode(0);
 
         $this->assertDatabaseCount('olt_monitoring_snapshots', 1);
-        $snapshot = \App\Models\OltMonitoringSnapshot::where('olt_device_id', $olt->id)->firstOrFail();
+        $snapshot = OltMonitoringSnapshot::where('olt_device_id', $olt->id)->firstOrFail();
 
         $this->assertSame(1, (int) $snapshot->onu_total);
         $this->assertSame(1, (int) $snapshot->onu_online);
@@ -311,7 +327,7 @@ class SyncOltOnuMappingsTest extends TestCase
         ]);
 
         $this->artisan('olt:sync-onu-mappings', ['--device' => $olt->id])->assertExitCode(0);
-        $first = \App\Models\OltMonitoringSnapshot::where('olt_device_id', $olt->id)->firstOrFail();
+        $first = OltMonitoringSnapshot::where('olt_device_id', $olt->id)->firstOrFail();
         $firstSampledAt = $first->sampled_at->toDateTimeString();
 
         // A second poll inside the configured 5-minute bucket must refresh metrics
@@ -360,4 +376,100 @@ class SyncOltOnuMappingsTest extends TestCase
         $this->assertDatabaseCount('olt_monitoring_snapshots', 0);
     }
 
+    public function test_unknown_onu_status_never_auto_assigns_customer_from_client_mac(): void
+    {
+        $olt = $this->olt();
+        $onuMac = '00:11:46:95:1c:c5';
+        $clientMac = 'a4:b1:c1:22:33:61';
+        [$customer, $ppp] = $this->customer('BTFDB-UNKNOWN', 'fdb.unknown.customer', 'active', $clientMac);
+        $mapping = OltOnuCustomerMapping::create([
+            'olt_device_id' => $olt->id, 'onu_id' => '25', 'pon_port' => '1',
+            'onu_mac' => $onuMac, 'status' => 'unknown',
+        ]);
+        $this->fakeAdapter($olt, $onuMac, [$clientMac], ['status' => 'unknown']);
+
+        $this->artisan('olt:sync-onu-mappings', ['--device' => $olt->id])->assertExitCode(0);
+
+        $this->assertNull($mapping->fresh()->customer_id);
+        $this->assertNull($mapping->fresh()->ppp_user_id);
+        $this->assertSame('unknown', $mapping->fresh()->status);
+        $this->assertDatabaseCount('olt_onu_customer_ppp_links', 0);
+    }
+
+    public function test_same_customer_device_mac_seen_behind_two_onus_is_never_shared_or_auto_mapped(): void
+    {
+        $olt = $this->olt();
+        $clientMac = 'a4:b1:c1:22:33:62';
+        $this->customer('BTFDB-DUP-CLIENT', 'fdb.duplicate.client', 'active', $clientMac);
+        $first = OltOnuCustomerMapping::create([
+            'olt_device_id' => $olt->id, 'onu_id' => '25', 'pon_port' => '1',
+            'onu_mac' => '00:11:46:95:1c:c5', 'status' => 'online',
+        ]);
+        $second = OltOnuCustomerMapping::create([
+            'olt_device_id' => $olt->id, 'onu_id' => '26', 'pon_port' => '1',
+            'onu_mac' => '00:11:46:95:1c:c6', 'status' => 'online',
+        ]);
+        $this->fakeAdapterRows($olt, [
+            ['pon_port' => '1', 'onu_id' => '25', 'onu_mac' => '00:11:46:95:1c:c5', 'client_macs' => [$clientMac], 'status' => 'online'],
+            ['pon_port' => '1', 'onu_id' => '26', 'onu_mac' => '00:11:46:95:1c:c6', 'client_macs' => [$clientMac], 'status' => 'online'],
+        ]);
+
+        $this->artisan('olt:sync-onu-mappings', ['--device' => $olt->id])->assertExitCode(0);
+
+        $this->assertNull($first->fresh()->customer_id);
+        $this->assertNull($first->fresh()->ppp_user_id);
+        $this->assertNull($second->fresh()->customer_id);
+        $this->assertNull($second->fresh()->ppp_user_id);
+        $this->assertDatabaseCount('olt_onu_customer_ppp_links', 0);
+    }
+
+    public function test_duplicate_onu_mac_slots_refresh_status_telemetry_without_changing_identity_or_subscribers(): void
+    {
+        $olt = $this->olt();
+        [$customer, $ppp] = $this->customer('DUP-ONU-OWNER', 'dup.onu.owner', 'active', 'a4:b1:c1:22:33:63');
+        $duplicateMac = 'a2:4f:a2:72:fe:c0';
+        $oldSeen = now()->subHours(3);
+        $offline = OltOnuCustomerMapping::create([
+            'olt_device_id' => $olt->id, 'customer_id' => $customer->id, 'ppp_user_id' => $ppp->id,
+            'pon_port' => '2', 'onu_id' => '8', 'onu_mac' => $duplicateMac,
+            'status' => 'online', 'last_seen_at' => $oldSeen,
+            'rx_power' => -19.5, 'tx_power' => 2.1, 'opm_source' => 'old-opm', 'opm_last_seen_at' => $oldSeen,
+        ]);
+        $link = OltOnuCustomerPppLink::create([
+            'olt_onu_customer_mapping_id' => $offline->id, 'customer_id' => $customer->id,
+            'ppp_user_id' => $ppp->id, 'client_mac' => 'a4:b1:c1:22:33:63', 'status' => 'active',
+            'source' => 'legacy_primary',
+        ]);
+        $ledger = OnuMacLedger::create([
+            'olt_device_id' => $olt->id, 'customer_id' => $customer->id,
+            'customer_unique_id' => $customer->customer_unique_id,
+            'pon_port' => '2', 'onu_id' => '8', 'current_mac' => $duplicateMac,
+            'pppoe_username' => $ppp->username, 'status' => 'online',
+            'rx_power' => -19.5, 'tx_power' => 2.1, 'last_seen_at' => $oldSeen,
+        ]);
+        $this->fakeAdapterRows($olt, [
+            ['pon_port' => '2', 'onu_id' => '8', 'onu_mac' => $duplicateMac, 'client_macs' => [], 'status' => 'offline', 'rx_power' => -19.5, 'tx_power' => 2.1],
+            ['pon_port' => '1', 'onu_id' => '26', 'onu_mac' => $duplicateMac, 'client_macs' => [], 'status' => 'online', 'rx_power' => -18.0, 'tx_power' => 2.0],
+        ]);
+
+        $this->artisan('olt:sync-onu-mappings', ['--device' => $olt->id])->assertExitCode(0);
+
+        $offline->refresh();
+        $this->assertSame($customer->id, $offline->customer_id);
+        $this->assertSame($ppp->id, $offline->ppp_user_id);
+        $this->assertSame($duplicateMac, $offline->onu_mac);
+        $this->assertSame('offline', $offline->status);
+        $this->assertSame($oldSeen->toDateTimeString(), $offline->last_seen_at->toDateTimeString());
+        $this->assertTrue($offline->opm_last_seen_at->greaterThan($oldSeen));
+        $this->assertEquals(-19.5, (float) $offline->rx_power);
+        $this->assertEquals(2.1, (float) $offline->tx_power);
+        $this->assertDatabaseHas('olt_onu_customer_ppp_links', [
+            'id' => $link->id, 'olt_onu_customer_mapping_id' => $offline->id, 'status' => 'active',
+        ]);
+        $ledger->refresh();
+        $this->assertSame($customer->id, $ledger->customer_id);
+        $this->assertSame('offline', $ledger->status);
+        $this->assertSame($offline->last_seen_at->timestamp, $ledger->last_seen_at->timestamp);
+        $this->assertTrue($ledger->updated_at->greaterThan($oldSeen));
+    }
 }

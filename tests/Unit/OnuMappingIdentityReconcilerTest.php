@@ -10,7 +10,7 @@ class OnuMappingIdentityReconcilerTest extends TestCase
 {
     public function test_maps_by_stable_mac_and_reports_rekeys_without_reassigning_customer_ids(): void
     {
-        $plan = (new OnuMappingIdentityReconciler())->plan([
+        $plan = (new OnuMappingIdentityReconciler)->plan([
             ['onu_id' => '34', 'pon_port' => '1', 'onu_mac' => '50:5b:1d:3a:90:c3', 'status' => 'online'],
             ['onu_id' => '0', 'pon_port' => '1', 'onu_mac' => '00:11:46:b6:dd:42', 'status' => 'online'],
         ], [
@@ -28,7 +28,7 @@ class OnuMappingIdentityReconcilerTest extends TestCase
 
     public function test_linked_stale_mapping_is_preserved_in_archive_plan_and_unlinked_stale_is_retained(): void
     {
-        $plan = (new OnuMappingIdentityReconciler())->plan([
+        $plan = (new OnuMappingIdentityReconciler)->plan([
             ['onu_id' => '1', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:55', 'status' => 'online'],
         ], [
             ['id' => 2, 'onu_id' => '7', 'onu_mac' => '80:14:a8:65:48:e8', 'customer_id' => null, 'ppp_user_id' => null],
@@ -43,7 +43,7 @@ class OnuMappingIdentityReconcilerTest extends TestCase
 
     public function test_duplicate_live_mac_is_reported_as_ambiguous_and_duplicate_pon_onu_id_is_rejected(): void
     {
-        $plan = (new OnuMappingIdentityReconciler())->plan([
+        $plan = (new OnuMappingIdentityReconciler)->plan([
             ['onu_id' => '1', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:55', 'status' => 'online'],
             ['onu_id' => '2', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:55', 'status' => 'online'],
         ], []);
@@ -52,16 +52,48 @@ class OnuMappingIdentityReconcilerTest extends TestCase
         $this->assertSame([], $plan['matched']);
 
         $this->expectException(InvalidArgumentException::class);
-        (new OnuMappingIdentityReconciler())->plan([
+        (new OnuMappingIdentityReconciler)->plan([
             ['onu_id' => '1', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:55', 'status' => 'online'],
             ['onu_id' => '1', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:66', 'status' => 'online'],
         ], []);
     }
 
+    public function test_same_hardware_mac_with_conflicting_stored_and_live_serial_is_blocked_when_linked(): void
+    {
+        $plan = (new OnuMappingIdentityReconciler)->plan([
+            ['onu_id' => '25', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:55', 'onu_serial' => 'SERIAL-NEW', 'status' => 'online'],
+        ], [
+            ['id' => 25, 'onu_id' => '25', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:55', 'onu_serial' => 'SERIAL-OLD', 'customer_id' => 100, 'ppp_user_id' => 200],
+        ]);
+
+        $this->assertSame([], $plan['matched']);
+        $this->assertCount(1, $plan['stale']);
+        $this->assertTrue($plan['stale'][0]['serial_conflict']);
+        $this->assertSame('SERIAL-NEW', $plan['new'][0]['onu_serial']);
+        $this->assertNotEmpty($plan['blockers']);
+        $this->assertStringContainsString('Serial conflicts with the live Serial', $plan['blockers'][0]);
+    }
+
+    public function test_same_hardware_mac_with_conflicting_serial_archives_only_an_unlinked_old_row(): void
+    {
+        $plan = (new OnuMappingIdentityReconciler)->plan([
+            ['onu_id' => '25', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:55', 'onu_serial' => 'SERIAL-NEW', 'status' => 'online'],
+        ], [
+            ['id' => 26, 'onu_id' => '25', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:55', 'onu_serial' => 'SERIAL-OLD', 'customer_id' => null, 'ppp_user_id' => null],
+        ]);
+
+        $this->assertSame([], $plan['matched']);
+        $this->assertCount(1, $plan['stale']);
+        $this->assertFalse($plan['stale'][0]['linked']);
+        $this->assertCount(1, $plan['new']);
+        $this->assertSame('SERIAL-NEW', $plan['new'][0]['onu_serial']);
+        $this->assertSame([], $plan['blockers']);
+    }
+
     public function test_rejects_duplicate_stored_mac(): void
     {
         $this->expectException(InvalidArgumentException::class);
-        (new OnuMappingIdentityReconciler())->plan([
+        (new OnuMappingIdentityReconciler)->plan([
             ['onu_id' => '1', 'pon_port' => '1', 'onu_mac' => '00:11:22:33:44:55', 'status' => 'online'],
         ], [
             ['id' => 1, 'onu_id' => '4', 'onu_mac' => '00:11:22:33:44:55'],
