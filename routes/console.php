@@ -87,7 +87,7 @@ Schedule::call(fn () => $runCommand(
     'MikroTik Router Log Poll',
     'Every minute',
     'app:poll-router-logs'
-))->everyMinute()->timezone($timezone)->name('mikrotik-router-log-poll')->withoutOverlapping();
+))->everyFiveMinutes()->timezone($timezone)->name('mikrotik-router-log-poll')->withoutOverlapping();
 
 Schedule::call(fn () => $runCommand(
     'expire-realtime-hotspot-users',
