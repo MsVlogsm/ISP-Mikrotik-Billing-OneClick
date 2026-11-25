@@ -86,4 +86,36 @@ class PaymentCollectionWorkflowTest extends TestCase
             'auto_disable_date' => '2026-12-03',
         ]);
     }
+    public function test_postpaid_new_expiry_tracks_the_selected_collection_datetime(): void
+    {
+        $customer = CustomersInfo::create([
+            'customer_unique_id' => 'PAY-COLLECTION-DATE-001',
+            'customer_name' => 'Collection Date Test',
+            'connection_date' => '2026-10-03',
+            'status' => 'active',
+            'disable_count' => 0,
+        ]);
+
+        BillingInfo::create([
+            'customer_bill_unique_id' => $customer->customer_unique_id,
+            'billing_type' => 'postpaid',
+            'monthly_rent' => 500,
+            'total_amount' => 500,
+            'due_amount' => 500,
+            'paid_amount' => 0,
+            'auto_disable' => true,
+            'auto_disable_date' => '2026-11-03',
+            'auto_disable_month' => 0,
+        ]);
+
+        Livewire::test(PaymentCollection::class)
+            ->call('selectCustomer', encrypt($customer->customer_unique_id))
+            ->assertSee('wire:model.live.debounce.250ms="collection_date"', false)
+            ->set('paid_amount', 500)
+            ->set('collection_date', '2026-11-23T14:30')
+            ->assertSet('expire_date', '2026-12-23')
+            ->set('collection_date', '2026-11-25T09:15')
+            ->assertSet('expire_date', '2026-12-25');
+    }
+
 }
