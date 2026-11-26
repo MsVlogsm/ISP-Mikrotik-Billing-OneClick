@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\NetworkBridgeFdbSnapshot;
 use App\Models\NetworkInventoryDevice;
 use App\Models\NetworkInventoryHealthCheck;
 use App\Models\OltMonitoringSnapshot;
 use App\Models\OltLiveMetricSnapshot;
 use App\Models\OltLiveMetricPort;
+use App\Services\Olt\OltCapabilityRegistry;
 use App\Services\Olt\OltLiveMetricsService;
 use App\Models\OltOnuCustomerMapping;
 use Illuminate\Http\RedirectResponse;
@@ -35,6 +37,10 @@ class OltDashboardController extends Controller
 
         $liveMetricSnapshot = OltLiveMetricSnapshot::where('olt_device_id', $device->id)
             ->latest('sampled_at')->first();
+        $latestFdbSnapshot = NetworkBridgeFdbSnapshot::query()
+            ->where('network_inventory_device_id', $device->id)
+            ->latest('sampled_at')
+            ->first();
         $livePorts = $liveMetricSnapshot
             ? OltLiveMetricPort::where('snapshot_id', $liveMetricSnapshot->id)->orderByRaw("CASE role WHEN 'pon' THEN 0 WHEN 'uplink_ge' THEN 1 WHEN 'uplink_sfp' THEN 2 ELSE 3 END")->orderBy('if_index')->get()
             : collect();
@@ -189,6 +195,19 @@ class OltDashboardController extends Controller
         $alerts = $this->buildAlerts($device, $stats, $latestSnapshot, $latestHealth, $freshOpmCount, $opmFreshMinutes);
 
         $rawCommunity = $device->getRawOriginal('snmp_community');
+        $ddmReadings = $liveMetricSnapshot
+            ? OltLiveMetricPort::query()
+                ->where('snapshot_id', $liveMetricSnapshot->id)
+                ->whereNotNull('ddm_source')
+                ->count()
+            : 0;
+        $capabilityMatrix = app(OltCapabilityRegistry::class)->forDevice(
+            $device,
+            $latestFdbSnapshot,
+            $liveMetricSnapshot,
+            $latestSnapshot,
+            $ddmReadings
+        );
         $deviceInfo = [
             'name' => $device->name,
             'ip' => $device->ip_address ?: $device->host,
@@ -228,7 +247,8 @@ class OltDashboardController extends Controller
             'freshOpmCount',
             'opmFreshMinutes',
             'alerts',
-            'deviceInfo'
+            'deviceInfo',
+            'capabilityMatrix'
         ));
     }
 
