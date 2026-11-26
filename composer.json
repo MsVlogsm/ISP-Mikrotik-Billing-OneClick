@@ -34,7 +34,7 @@
         "spatie/laravel-activitylog": "^4.10",
         "spatie/laravel-backup-server": "^4.2",
         "spatie/laravel-health": "^1.34",
-        "spatie/laravel-permission": "^6.18",
+        "spatie/laravel-permission": "^8.5",
         "spatie/simple-excel": "^3.7",
         "xlink/sms-bridge": "^1.0",
         "yajra/laravel-datatables": "^13.0"
