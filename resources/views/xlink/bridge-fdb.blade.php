@@ -20,7 +20,9 @@
         <div class="d-flex flex-wrap gap-2">
             @if($device->type === 'olt')
                 <a class="btn btn-outline-secondary" href="{{ route('network-inventory.olt.dashboard', $device) }}"><i class="bi bi-speedometer2 me-1"></i> OLT Overview</a>
-                <a class="btn btn-outline-secondary" href="{{ route('network-inventory.universal-search') }}"><i class="bi bi-search me-1"></i> Universal Search</a>
+                @if (Route::has('network-inventory.universal-search'))
+                    <a class="btn btn-outline-secondary" href="{{ route('network-inventory.universal-search') }}"><i class="bi bi-search me-1"></i> Universal Search</a>
+                @endif
             @endif
             @if($pollEnabled)
                 <form method="POST" action="{{ route('network-inventory.device.bridge-fdb.poll', $device) }}" onsubmit="const b=this.querySelector('button');b.disabled=true;b.innerHTML='<span class=&quot;spinner-border spinner-border-sm me-1&quot;></span>Reading FDB…';">
